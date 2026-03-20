@@ -208,13 +208,13 @@ def main():
         curr = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
         dt = max(0.2, now - prev_t)
         if now - last_button > 0.2:
-            if button_pressed(PIN_UP):
+            if button_pressed(PIN_UP) or button_pressed(PIN_KEY1):
                 page_idx = (page_idx - 1) % len(PAGES)
                 last_button = now
-            elif button_pressed(PIN_DOWN):
+            elif button_pressed(PIN_DOWN) or button_pressed(PIN_KEY2):
                 page_idx = (page_idx + 1) % len(PAGES)
                 last_button = now
-            elif button_pressed(PIN_PRESS) or button_pressed(PIN_KEY1) or button_pressed(PIN_KEY2):
+            elif button_pressed(PIN_PRESS):
                 last_button = now
         render_page(lcd, PAGES[page_idx], prev, curr, dt)
         prev = curr
