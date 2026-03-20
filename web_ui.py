@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import re
 import subprocess
@@ -10,10 +11,56 @@ APP.secret_key = os.environ.get("FLASK_SECRET", "rpi-ap-tools")
 
 WLAN_IFACE = os.environ.get("WLAN1_IFACE", "wlan1")
 HOSTAPD_CONF = Path(os.environ.get("HOSTAPD_CONF", "/etc/hostapd/hostapd.conf"))
+WIFI_DB_PATH = Path(os.environ.get("WIFI_DB_PATH", "/etc/rpi_ap_tools_wifi_db.json"))
 
 
 def run(cmd, check=True):
     return subprocess.run(cmd, text=True, capture_output=True, check=check)
+
+
+def load_wifi_db():
+    if not WIFI_DB_PATH.exists():
+        return {}
+
+    try:
+        data = json.loads(WIFI_DB_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    cleaned = {}
+    for ssid, item in data.items():
+        if not isinstance(ssid, str) or not isinstance(item, dict):
+            continue
+        cleaned[ssid] = {
+            "password": str(item.get("password", "")),
+            "auth_type": str(item.get("auth_type", "wpa-psk")),
+        }
+    return cleaned
+
+
+def save_wifi_db(db):
+    WIFI_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    WIFI_DB_PATH.write_text(json.dumps(db, indent=2, sort_keys=True), encoding="utf-8")
+    try:
+        os.chmod(WIFI_DB_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def save_wifi_credentials(ssid, password, auth_type):
+    db = load_wifi_db()
+    db[ssid] = {
+        "password": password or "",
+        "auth_type": auth_type or "wpa-psk",
+    }
+    save_wifi_db(db)
+
+
+def get_saved_wifi(ssid):
+    return load_wifi_db().get(ssid, {})
 
 
 def get_ap_name():
@@ -46,6 +93,7 @@ def infer_auth_type(security: str) -> str:
 
 
 def scan_wifi():
+    wifi_db = load_wifi_db()
     run(["nmcli", "dev", "wifi", "rescan", "ifname", WLAN_IFACE], check=False)
     result = run(["nmcli", "-t", "-f", "SSID,SECURITY,SIGNAL", "dev", "wifi", "list", "ifname", WLAN_IFACE], check=False)
     seen = {}
@@ -61,6 +109,9 @@ def scan_wifi():
             "security": security or "--",
             "signal": signal or "0",
             "auth_type": infer_auth_type(security or "--"),
+            "saved_password": bool(wifi_db.get(ssid, {}).get("password", "")),
+            "saved_password_value": wifi_db.get(ssid, {}).get("password", ""),
+            "saved_auth_type": wifi_db.get(ssid, {}).get("auth_type", ""),
         }
         # keep strongest duplicate SSID
         if ssid not in seen or int(row["signal"]) > int(seen[ssid]["signal"]):
@@ -159,7 +210,17 @@ def connect():
         flash("SSID is required", "error")
         return redirect(url_for("index"))
 
+    saved = get_saved_wifi(ssid)
+    if auth_type != "open" and not password and saved.get("password"):
+        password = saved["password"]
+
+    if auth_type != "open" and not password:
+        flash("Password is required for secured Wi-Fi", "error")
+        return redirect(url_for("index"))
+
     ok, msg = connect_wifi(ssid, password, auth_type)
+    if ok:
+        save_wifi_credentials(ssid, "" if auth_type == "open" else password, auth_type)
     flash(msg, "success" if ok else "error")
     return redirect(url_for("index"))
 

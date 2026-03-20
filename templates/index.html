@@ -90,6 +90,34 @@
       width: auto;
     }
     .chip:hover { background: var(--chip-hover); }
+    .saved-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 8px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(52, 211, 153, 0.14);
+      color: #a7f3d0;
+      font-size: 12px;
+      vertical-align: middle;
+    }
+    .field-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .field-row input {
+      flex: 1;
+    }
+    .secondary-button {
+      width: auto;
+      min-width: 110px;
+      background: var(--chip);
+      color: var(--text);
+      border: 1px solid var(--field-border);
+    }
+    .secondary-button:hover { background: var(--chip-hover); }
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 10px 8px; border-bottom: 1px solid var(--table-border); text-align: left; }
     th { color: var(--text); }
@@ -121,6 +149,12 @@
         content: attr(data-label) ": ";
         font-weight: bold;
         color: var(--text);
+      }
+      .field-row {
+        display: block;
+      }
+      .secondary-button {
+        width: 100%;
       }
     }
   </style>
@@ -163,7 +197,10 @@
         </datalist>
 
         <label>Password</label>
-        <input id="password" name="password" type="password" placeholder="Password">
+        <div class="field-row">
+          <input id="password" name="password" type="password" placeholder="Password">
+          <button id="toggle-password" class="secondary-button" type="button">Show</button>
+        </div>
 
         <label>Auth type</label>
         <select id="auth_type" name="auth_type">
@@ -183,8 +220,10 @@
           type="button"
           class="chip js-prefill"
           data-ssid="{{ item.ssid }}"
-          data-auth-type="{{ item.auth_type }}">
+          data-auth-type="{{ item.saved_auth_type or item.auth_type }}"
+          data-password="{{ item.saved_password_value }}">
           {{ item.ssid }} ({{ item.signal }}%)
+          {% if item.saved_password %}<span class="saved-badge">🔑 saved</span>{% endif %}
         </button>
         {% endfor %}
       </div>
@@ -193,12 +232,13 @@
 
   <div class="card" style="margin-top:16px;">
     <h2>Visible networks</h2>
-    <p>Tap a row to prefill SSID and auth type.</p>
+    <p>Tap a row to prefill SSID, auth type, and saved password when available.</p>
     <table>
       <thead>
         <tr>
           <th>SSID</th>
           <th>Security</th>
+          <th>Saved</th>
           <th>Signal</th>
         </tr>
       </thead>
@@ -207,9 +247,11 @@
         <tr
           class="clickable js-prefill"
           data-ssid="{{ item.ssid }}"
-          data-auth-type="{{ item.auth_type }}">
+          data-auth-type="{{ item.saved_auth_type or item.auth_type }}"
+          data-password="{{ item.saved_password_value }}">
           <td data-label="SSID">{{ item.ssid }}</td>
           <td data-label="Security">{{ item.security }}</td>
+          <td data-label="Saved">{% if item.saved_password %}🔑 Saved{% else %}-{% endif %}</td>
           <td data-label="Signal" class="signal">{{ item.signal }}%</td>
         </tr>
         {% endfor %}
@@ -218,22 +260,37 @@
   </div>
 
 <script>
-function prefillWifi(ssid, authType) {
+function prefillWifi(ssid, authType, password) {
   document.getElementById("ssid").value = ssid || "";
   document.getElementById("auth_type").value = authType || "wpa-psk";
+  document.getElementById("password").value = password || "";
 
   const note = document.getElementById("prefill-note");
   if (note) {
-    note.textContent = ssid ? `Selected ${ssid}. Enter the password if needed.` : "";
+    note.textContent = ssid
+      ? (password ? `Selected ${ssid}. Saved password loaded.` : `Selected ${ssid}. Enter the password if needed.`)
+      : "";
   }
 
   document.getElementById("password").focus();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+document.getElementById("toggle-password").addEventListener("click", () => {
+  const passwordInput = document.getElementById("password");
+  const toggleButton = document.getElementById("toggle-password");
+  const showPassword = passwordInput.type === "password";
+  passwordInput.type = showPassword ? "text" : "password";
+  toggleButton.textContent = showPassword ? "Hide" : "Show";
+});
+
 document.querySelectorAll(".js-prefill").forEach((element) => {
   element.addEventListener("click", () => {
-    prefillWifi(element.dataset.ssid || "", element.dataset.authType || "wpa-psk");
+    prefillWifi(
+      element.dataset.ssid || "",
+      element.dataset.authType || "wpa-psk",
+      element.dataset.password || ""
+    );
   });
 });
 </script>
