@@ -2,44 +2,116 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>RPi uplink Wi‑Fi</title>
+  <title>RPi uplink Wi-Fi</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: Arial, sans-serif; margin: 16px; max-width: 980px; }
-    .row { display: flex; gap: 16px; flex-wrap: wrap; }
-    .card { border: 1px solid #ccc; border-radius: 12px; padding: 16px; flex: 1; min-width: 280px; }
-    input, select, button { padding: 10px; margin: 6px 0; width: 100%; box-sizing: border-box; border-radius: 8px; border: 1px solid #bbb; }
-    button { cursor: pointer; }
-    .mono { font-family: monospace; }
-    .ok { color: #0a6; }
-    .err { color: #c33; }
-
-    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-    .chip {
-      border: 1px solid #bbb;
-      border-radius: 999px;
-      padding: 8px 12px;
-      background: #f8f8f8;
-      cursor: pointer;
-      font-size: 14px;
+    :root {
+      color-scheme: dark;
+      --bg: #0b1220;
+      --bg-accent: radial-gradient(circle at top, rgba(56, 189, 248, 0.14), transparent 38%), linear-gradient(180deg, #111827 0%, #020617 100%);
+      --card: rgba(15, 23, 42, 0.92);
+      --card-border: #334155;
+      --text: #e5eefc;
+      --muted: #9fb0c8;
+      --field: #0f172a;
+      --field-border: #475569;
+      --field-focus: #38bdf8;
+      --button: #38bdf8;
+      --button-text: #082f49;
+      --button-hover: #7dd3fc;
+      --chip: #1e293b;
+      --chip-hover: #334155;
+      --table-border: #243244;
+      --row-hover: rgba(56, 189, 248, 0.12);
+      --success: #34d399;
+      --error: #f87171;
+      --shadow: 0 18px 40px rgba(2, 6, 23, 0.38);
     }
 
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", Arial, sans-serif;
+      margin: 16px;
+      max-width: 980px;
+      background: var(--bg-accent), var(--bg);
+      color: var(--text);
+    }
+    h1, h2, h3 { color: var(--text); }
+    p, label { color: var(--muted); }
+    strong { color: var(--text); }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card {
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 16px;
+      flex: 1;
+      min-width: 280px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+    input, select, button {
+      padding: 10px;
+      margin: 6px 0;
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--field-border);
+      background: var(--field);
+      color: var(--text);
+    }
+    input::placeholder { color: var(--muted); }
+    input:focus, select:focus, button:focus {
+      outline: 2px solid rgba(56, 189, 248, 0.28);
+      outline-offset: 1px;
+      border-color: var(--field-focus);
+    }
+    button {
+      cursor: pointer;
+      background: var(--button);
+      border-color: transparent;
+      color: var(--button-text);
+      font-weight: 600;
+      transition: background 0.15s ease, transform 0.15s ease;
+    }
+    button:hover { background: var(--button-hover); }
+    button:active { transform: translateY(1px); }
+    .mono { font-family: Consolas, "Courier New", monospace; color: var(--text); }
+    .ok { color: var(--success); }
+    .err { color: var(--error); }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .chip {
+      border: 1px solid var(--field-border);
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: var(--chip);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 14px;
+      width: auto;
+    }
+    .chip:hover { background: var(--chip-hover); }
     table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 10px 8px; border-bottom: 1px solid #ddd; text-align: left; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid var(--table-border); text-align: left; }
+    th { color: var(--text); }
     tr.clickable { cursor: pointer; }
-    tr.clickable:hover { background: #f5f5f5; }
-
+    tr.clickable:hover { background: var(--row-hover); }
     .signal { white-space: nowrap; }
+    .prefill-note {
+      margin-top: 10px;
+      color: var(--success);
+      min-height: 1.2em;
+      font-size: 14px;
+    }
 
     @media (max-width: 700px) {
       table, thead, tbody, th, td, tr { display: block; }
       thead { display: none; }
       tr.clickable {
-        border: 1px solid #ddd;
+        border: 1px solid var(--table-border);
         border-radius: 12px;
         margin-bottom: 10px;
         padding: 8px;
-        background: #fff;
+        background: rgba(15, 23, 42, 0.96);
       }
       td {
         border: none;
@@ -48,12 +120,13 @@
       td::before {
         content: attr(data-label) ": ";
         font-weight: bold;
+        color: var(--text);
       }
     }
   </style>
 </head>
 <body>
-  <h1>RPi uplink Wi‑Fi</h1>
+  <h1>RPi uplink Wi-Fi</h1>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -101,12 +174,16 @@
 
         <button type="submit">Connect</button>
       </form>
+      <div id="prefill-note" class="prefill-note" aria-live="polite"></div>
 
       <h3>Strongest networks</h3>
       <div class="chips">
         {% for item in top_wifi %}
-        <button type="button" class="chip"
-          onclick="prefillWifi({{ item.ssid|tojson }}, {{ item.auth_type|tojson }})">
+        <button
+          type="button"
+          class="chip js-prefill"
+          data-ssid="{{ item.ssid }}"
+          data-auth-type="{{ item.auth_type }}">
           {{ item.ssid }} ({{ item.signal }}%)
         </button>
         {% endfor %}
@@ -127,8 +204,10 @@
       </thead>
       <tbody>
         {% for item in wifi_list %}
-        <tr class="clickable"
-            onclick="prefillWifi({{ item.ssid|tojson }}, {{ item.auth_type|tojson }})">
+        <tr
+          class="clickable js-prefill"
+          data-ssid="{{ item.ssid }}"
+          data-auth-type="{{ item.auth_type }}">
           <td data-label="SSID">{{ item.ssid }}</td>
           <td data-label="Security">{{ item.security }}</td>
           <td data-label="Signal" class="signal">{{ item.signal }}%</td>
@@ -142,9 +221,21 @@
 function prefillWifi(ssid, authType) {
   document.getElementById("ssid").value = ssid || "";
   document.getElementById("auth_type").value = authType || "wpa-psk";
+
+  const note = document.getElementById("prefill-note");
+  if (note) {
+    note.textContent = ssid ? `Selected ${ssid}. Enter the password if needed.` : "";
+  }
+
   document.getElementById("password").focus();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
+
+document.querySelectorAll(".js-prefill").forEach((element) => {
+  element.addEventListener("click", () => {
+    prefillWifi(element.dataset.ssid || "", element.dataset.authType || "wpa-psk");
+  });
+});
 </script>
 </body>
 </html>
