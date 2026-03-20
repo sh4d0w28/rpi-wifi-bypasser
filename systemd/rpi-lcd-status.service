@@ -1,0 +1,15 @@
+[Unit]
+Description=RPi AP LCD status display (Waveshare 1.44inch LCD HAT)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rpi_ap_tools
+ExecStart=/usr/bin/python3 /opt/rpi_ap_tools/lcd_status.py
+Restart=always
+RestartSec=2
+User=root
+Environment=WAVESHARE_LCD_PATH=/home/pi/1.44inch-LCD-HAT-Code/RaspberryPi/python
+
+[Install]
+WantedBy=multi-user.target

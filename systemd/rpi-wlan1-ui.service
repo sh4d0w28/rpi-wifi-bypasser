@@ -1,0 +1,16 @@
+[Unit]
+Description=RPi wlan1 configuration web UI
+After=network.target NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/rpi_ap_tools
+ExecStart=/usr/bin/python3 /opt/rpi_ap_tools/web_ui.py
+Restart=always
+RestartSec=2
+User=root
+Environment=FLASK_SECRET=rpi-ap-tools
+
+[Install]
+WantedBy=multi-user.target

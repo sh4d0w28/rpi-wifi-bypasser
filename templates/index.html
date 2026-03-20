@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>RPi uplink Wi‑Fi</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; max-width: 980px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { border: 1px solid #ccc; border-radius: 12px; padding: 16px; flex: 1; min-width: 280px; }
+    input, select, button { padding: 10px; margin: 6px 0; width: 100%; box-sizing: border-box; border-radius: 8px; border: 1px solid #bbb; }
+    button { cursor: pointer; }
+    .mono { font-family: monospace; }
+    .ok { color: #0a6; }
+    .err { color: #c33; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .chip {
+      border: 1px solid #bbb;
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: #f8f8f8;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #ddd; text-align: left; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: #f5f5f5; }
+
+    .signal { white-space: nowrap; }
+
+    @media (max-width: 700px) {
+      table, thead, tbody, th, td, tr { display: block; }
+      thead { display: none; }
+      tr.clickable {
+        border: 1px solid #ddd;
+        border-radius: 12px;
+        margin-bottom: 10px;
+        padding: 8px;
+        background: #fff;
+      }
+      td {
+        border: none;
+        padding: 6px 4px;
+      }
+      td::before {
+        content: attr(data-label) ": ";
+        font-weight: bold;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>RPi uplink Wi‑Fi</h1>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="card">
+      {% for category, message in messages %}
+        <div class="{{ 'ok' if category == 'success' else 'err' }}">{{ message }}</div>
+      {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <div class="row">
+    <div class="card">
+      <h2>Status</h2>
+      <p><strong>AP name:</strong> <span class="mono">{{ ap_name }}</span></p>
+      <p><strong>wlan0 IP:</strong> <span class="mono">{{ wlan0_ip }}</span></p>
+      <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
+      <p><strong>Active uplink:</strong> <span class="mono">{{ active.name or 'none' }}</span></p>
+      <p><strong>State:</strong> <span class="mono">{{ active.state }}</span></p>
+      <form method="post" action="/disconnect">
+        <button type="submit">Disconnect wlan1</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Connect wlan1</h2>
+      <form method="post" action="/connect" id="wifi-form">
+        <label>SSID</label>
+        <input id="ssid" name="ssid" list="ssid-list" placeholder="SSID" required>
+        <datalist id="ssid-list">
+          {% for item in wifi_list %}
+          <option value="{{ item.ssid }}"></option>
+          {% endfor %}
+        </datalist>
+
+        <label>Password</label>
+        <input id="password" name="password" type="password" placeholder="Password">
+
+        <label>Auth type</label>
+        <select id="auth_type" name="auth_type">
+          <option value="wpa-psk">WPA2 / WPA mixed</option>
+          <option value="sae">WPA3-Personal</option>
+          <option value="open">Open</option>
+        </select>
+
+        <button type="submit">Connect</button>
+      </form>
+
+      <h3>Strongest networks</h3>
+      <div class="chips">
+        {% for item in top_wifi %}
+        <button type="button" class="chip"
+          onclick="prefillWifi({{ item.ssid|tojson }}, {{ item.auth_type|tojson }})">
+          {{ item.ssid }} ({{ item.signal }}%)
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <h2>Visible networks</h2>
+    <p>Tap a row to prefill SSID and auth type.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>SSID</th>
+          <th>Security</th>
+          <th>Signal</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in wifi_list %}
+        <tr class="clickable"
+            onclick="prefillWifi({{ item.ssid|tojson }}, {{ item.auth_type|tojson }})">
+          <td data-label="SSID">{{ item.ssid }}</td>
+          <td data-label="Security">{{ item.security }}</td>
+          <td data-label="Signal" class="signal">{{ item.signal }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+<script>
+function prefillWifi(ssid, authType) {
+  document.getElementById("ssid").value = ssid || "";
+  document.getElementById("auth_type").value = authType || "wpa-psk";
+  document.getElementById("password").focus();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+</script>
+</body>
+</html>
