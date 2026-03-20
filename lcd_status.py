@@ -4,6 +4,7 @@ import re
 import time
 import socket
 import subprocess
+from collections import deque
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -33,6 +34,7 @@ PIN_KEY1 = 21
 PIN_KEY2 = 20
 FONT = ImageFont.load_default()
 PAGES = ["main", "totals"]
+CPU_SAMPLES = deque(maxlen=2)
 
 def run(cmd):
     return subprocess.run(cmd, text=True, capture_output=True, check=False)
@@ -50,6 +52,63 @@ def read_ipv4(dev):
         return "-"
     m = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+/\d+)', proc.stdout)
     return m.group(1) if m else "-"
+
+def read_active_wifi():
+    proc = run(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL", "dev", "wifi", "list", "ifname", WLAN_UP])
+    for line in proc.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 3 and parts[0] == "*":
+            return {"name": parts[1] or "-", "signal": parts[2] or "-"}
+    return {"name": "-", "signal": "-"}
+
+def read_cpu_temp_c():
+    candidates = [
+        "/sys/class/thermal/thermal_zone0/temp",
+        "/sys/devices/virtual/thermal/thermal_zone0/temp",
+    ]
+    for path in candidates:
+        try:
+            raw = Path(path).read_text().strip()
+            return float(raw) / 1000.0
+        except Exception:
+            continue
+    return None
+
+def read_cpu_percent():
+    try:
+        fields = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0].split()[1:]
+        values = [int(v) for v in fields]
+    except Exception:
+        return None
+
+    total = sum(values)
+    idle = values[3] + (values[4] if len(values) > 4 else 0)
+    CPU_SAMPLES.append((total, idle))
+    if len(CPU_SAMPLES) < 2:
+        return None
+
+    prev_total, prev_idle = CPU_SAMPLES[0]
+    curr_total, curr_idle = CPU_SAMPLES[1]
+    total_diff = curr_total - prev_total
+    idle_diff = curr_idle - prev_idle
+    if total_diff <= 0:
+        return None
+    return max(0.0, min(100.0, 100.0 * (1.0 - (idle_diff / total_diff))))
+
+def read_mem_percent():
+    try:
+        data = {}
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, value = line.split(":", 1)
+            data[key] = int(value.strip().split()[0])
+        total = data.get("MemTotal", 0)
+        available = data.get("MemAvailable", 0)
+        if total <= 0:
+            return None
+        used = total - available
+        return max(0.0, min(100.0, 100.0 * used / total))
+    except Exception:
+        return None
 
 def read_sysfs_int(path):
     try:
@@ -81,30 +140,36 @@ def render_page(lcd, page, prev_stats, curr_stats, dt):
     ap = read_ap_name()
     w0 = read_ipv4(WLAN_AP)
     w1 = read_ipv4(WLAN_UP)
+    active_wifi = read_active_wifi()
+    cpu_temp = read_cpu_temp_c()
+    cpu_pct = read_cpu_percent()
+    mem_pct = read_mem_percent()
     if page == "main":
-        rx0ps = max(0, (curr_stats[WLAN_AP]["rx"] - prev_stats[WLAN_AP]["rx"]) / dt)
-        tx0ps = max(0, (curr_stats[WLAN_AP]["tx"] - prev_stats[WLAN_AP]["tx"]) / dt)
         rx1ps = max(0, (curr_stats[WLAN_UP]["rx"] - prev_stats[WLAN_UP]["rx"]) / dt)
         tx1ps = max(0, (curr_stats[WLAN_UP]["tx"] - prev_stats[WLAN_UP]["tx"]) / dt)
         lines = [
             f"AP:{ap}"[:21],
             f"{WLAN_AP}:{w0}"[:21],
             f"{WLAN_UP}:{w1}"[:21],
-            f"0 RX {human_bytes(rx0ps)}/s"[:21],
-            f"0 TX {human_bytes(tx0ps)}/s"[:21],
-            f"1 RX {human_bytes(rx1ps)}/s"[:21],
-            f"1 TX {human_bytes(tx1ps)}/s"[:21],
-            f"Host:{socket.gethostname()}"[:21],
+            f"WiFi:{active_wifi['name']}"[:21],
+            f"Sig:{active_wifi['signal']}%"[:21],
+            f"1RX:{human_bytes(rx1ps)}/s"[:21],
+            f"1TX:{human_bytes(tx1ps)}/s"[:21],
+            f"T:{'-' if cpu_temp is None else f'{cpu_temp:.1f}C'} C:{'-' if cpu_pct is None else f'{cpu_pct:.0f}%'}"[:21],
+            f"M:{'-' if mem_pct is None else f'{mem_pct:.0f}%'} {socket.gethostname()}"[:21],
         ]
     else:
+        rx0ps = max(0, (curr_stats[WLAN_AP]["rx"] - prev_stats[WLAN_AP]["rx"]) / dt)
+        tx0ps = max(0, (curr_stats[WLAN_AP]["tx"] - prev_stats[WLAN_AP]["tx"]) / dt)
         lines = [
             f"AP:{ap}"[:21],
+            f"WiFi:{active_wifi['name']}"[:21],
+            f"Sig:{active_wifi['signal']}%"[:21],
+            f"0RX:{human_bytes(rx0ps)}/s"[:21],
+            f"0TX:{human_bytes(tx0ps)}/s"[:21],
             f"{WLAN_AP} RX {human_bytes(curr_stats[WLAN_AP]['rx'])}"[:21],
-            f"{WLAN_AP} TX {human_bytes(curr_stats[WLAN_AP]['tx'])}"[:21],
             f"{WLAN_UP} RX {human_bytes(curr_stats[WLAN_UP]['rx'])}"[:21],
-            f"{WLAN_UP} TX {human_bytes(curr_stats[WLAN_UP]['tx'])}"[:21],
-            "UP/DOWN page",
-            "PRESS refresh",
+            f"C:{'-' if cpu_pct is None else f'{cpu_pct:.0f}%'} M:{'-' if mem_pct is None else f'{mem_pct:.0f}%'}"[:21],
         ]
     draw_text_block(draw, lines)
     lcd.LCD_ShowImage(image, 0, 0)
