@@ -33,7 +33,6 @@ PIN_PRESS = 13
 PIN_KEY1 = 21
 PIN_KEY2 = 20
 FONT = ImageFont.load_default()
-PAGES = ["main", "totals"]
 CPU_SAMPLES = deque(maxlen=2)
 
 def run(cmd):
@@ -128,51 +127,96 @@ def human_bytes(n):
             return f"{value:.1f}{unit}"
         value /= 1024.0
 
-def draw_text_block(draw, lines):
-    y = 2
-    for line in lines:
-        draw.text((2, y), line, font=FONT, fill="WHITE")
-        y += 11
+def ip_only(value):
+    if not value or value == "-":
+        return "-"
+    return value.split("/", 1)[0]
 
-def render_page(lcd, page, prev_stats, curr_stats, dt):
+def fit_text(text, max_chars):
+    text = text or "-"
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 1:
+        return text[:max_chars]
+    return text[: max_chars - 1] + "."
+
+def metric_color(value, warn, danger):
+    if value is None:
+        return (180, 180, 180)
+    if value >= danger:
+        return (255, 96, 96)
+    if value >= warn:
+        return (255, 210, 90)
+    return (120, 255, 160)
+
+def signal_color(signal):
+    try:
+        value = int(signal)
+    except Exception:
+        return (180, 180, 180)
+    if value >= 70:
+        return (120, 255, 160)
+    if value >= 40:
+        return (255, 210, 90)
+    return (255, 96, 96)
+
+def draw_label_value(draw, x, y, label, value, value_fill="WHITE", gap=22):
+    draw.text((x, y), label, font=FONT, fill=(140, 170, 210))
+    draw.text((x + gap, y), value, font=FONT, fill=value_fill)
+
+def render_screen(lcd, prev_stats, curr_stats, dt):
     image = Image.new("RGB", (128, 128), "BLACK")
     draw = ImageDraw.Draw(image)
     ap = read_ap_name()
-    w0 = read_ipv4(WLAN_AP)
-    w1 = read_ipv4(WLAN_UP)
+    w0 = ip_only(read_ipv4(WLAN_AP))
+    w1 = ip_only(read_ipv4(WLAN_UP))
     active_wifi = read_active_wifi()
     cpu_temp = read_cpu_temp_c()
     cpu_pct = read_cpu_percent()
     mem_pct = read_mem_percent()
-    if page == "main":
-        rx1ps = max(0, (curr_stats[WLAN_UP]["rx"] - prev_stats[WLAN_UP]["rx"]) / dt)
-        tx1ps = max(0, (curr_stats[WLAN_UP]["tx"] - prev_stats[WLAN_UP]["tx"]) / dt)
-        lines = [
-            f"AP:{ap}"[:21],
-            f"{WLAN_AP}:{w0}"[:21],
-            f"{WLAN_UP}:{w1}"[:21],
-            f"WiFi:{active_wifi['name']}"[:21],
-            f"Sig:{active_wifi['signal']}%"[:21],
-            f"1RX:{human_bytes(rx1ps)}/s"[:21],
-            f"1TX:{human_bytes(tx1ps)}/s"[:21],
-            f"T:{'-' if cpu_temp is None else f'{cpu_temp:.1f}C'} C:{'-' if cpu_pct is None else f'{cpu_pct:.0f}%'}"[:21],
-            f"M:{'-' if mem_pct is None else f'{mem_pct:.0f}%'} {socket.gethostname()}"[:21],
-        ]
-    else:
-        rx0ps = max(0, (curr_stats[WLAN_AP]["rx"] - prev_stats[WLAN_AP]["rx"]) / dt)
-        tx0ps = max(0, (curr_stats[WLAN_AP]["tx"] - prev_stats[WLAN_AP]["tx"]) / dt)
-        lines = [
-            f"AP:{ap}"[:21],
-            f"WiFi:{active_wifi['name']}"[:21],
-            f"Sig:{active_wifi['signal']}%"[:21],
-            f"0RX:{human_bytes(rx0ps)}/s"[:21],
-            f"0TX:{human_bytes(tx0ps)}/s"[:21],
-            f"{WLAN_AP} RX {human_bytes(curr_stats[WLAN_AP]['rx'])}"[:21],
-            f"{WLAN_UP} RX {human_bytes(curr_stats[WLAN_UP]['rx'])}"[:21],
-            f"C:{'-' if cpu_pct is None else f'{cpu_pct:.0f}%'} M:{'-' if mem_pct is None else f'{mem_pct:.0f}%'}"[:21],
-        ]
-    draw_text_block(draw, lines)
-    lcd.LCD_ShowImage(image, 0, 0)
+    rx1ps = max(0, (curr_stats[WLAN_UP]["rx"] - prev_stats[WLAN_UP]["rx"]) / dt)
+    tx1ps = max(0, (curr_stats[WLAN_UP]["tx"] - prev_stats[WLAN_UP]["tx"]) / dt)
+
+    ap_ok = ap != "unknown" and w0 != "-"
+    cl_ok = active_wifi["name"] != "-" and w1 != "-"
+    signal = active_wifi["signal"] if cl_ok else "-"
+
+    draw.rectangle((0, 0, 127, 127), fill=(4, 10, 20))
+    draw.rectangle((0, 0, 127, 15), fill=(10, 26, 44))
+    draw.line((0, 16, 127, 16), fill=(28, 60, 92), width=1)
+
+    draw.text((3, 3), "AP", font=FONT, fill=(140, 170, 210))
+    draw.text((19, 3), "OK" if ap_ok else "NO", font=FONT, fill=((120, 255, 160) if ap_ok else (255, 96, 96)))
+    draw.text((46, 3), "CL", font=FONT, fill=(140, 170, 210))
+    draw.text((62, 3), "OK" if cl_ok else "NO", font=FONT, fill=((120, 255, 160) if cl_ok else (255, 96, 96)))
+    draw.text((90, 3), f"{signal}%" if signal != "-" else "--", font=FONT, fill=signal_color(signal))
+
+    draw.text((3, 22), fit_text(ap, 20), font=FONT, fill=(240, 244, 255))
+    draw.text((3, 35), fit_text(active_wifi["name"], 20), font=FONT, fill=(120, 220, 255))
+
+    draw.line((2, 49, 125, 49), fill=(24, 44, 68), width=1)
+
+    draw_label_value(draw, 3, 54, "w0", fit_text(w0, 15), (255, 255, 255), gap=18)
+    draw_label_value(draw, 3, 67, "w1", fit_text(w1, 15), (255, 255, 255), gap=18)
+
+    draw.line((2, 81, 125, 81), fill=(24, 44, 68), width=1)
+
+    draw_label_value(draw, 3, 86, "RX", f"{human_bytes(rx1ps)}/s", (120, 255, 160), gap=18)
+    draw_label_value(draw, 3, 99, "TX", f"{human_bytes(tx1ps)}/s", (255, 210, 90), gap=18)
+
+    draw.line((2, 113, 125, 113), fill=(24, 44, 68), width=1)
+
+    temp_text = "-" if cpu_temp is None else f"{cpu_temp:.0f}C"
+    cpu_text = "-" if cpu_pct is None else f"{cpu_pct:.0f}%"
+    mem_text = "-" if mem_pct is None else f"{mem_pct:.0f}%"
+    draw.text((3, 117), "T", font=FONT, fill=(140, 170, 210))
+    draw.text((13, 117), temp_text, font=FONT, fill=metric_color(cpu_temp, 60, 75))
+    draw.text((43, 117), "C", font=FONT, fill=(140, 170, 210))
+    draw.text((53, 117), cpu_text, font=FONT, fill=metric_color(cpu_pct, 60, 85))
+    draw.text((83, 117), "M", font=FONT, fill=(140, 170, 210))
+    draw.text((93, 117), mem_text, font=FONT, fill=metric_color(mem_pct, 70, 85))
+
+    lcd.LCD_ShowImage(image.rotate(90), 0, 0)
 
 def button_pressed(pin):
     try:
@@ -199,24 +243,13 @@ def main():
         lcd.LCD_Clear()
     except Exception:
         pass
-    page_idx = 0
     prev = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
     prev_t = time.time()
-    last_button = 0.0
     while True:
         now = time.time()
         curr = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
         dt = max(0.2, now - prev_t)
-        if now - last_button > 0.2:
-            if button_pressed(PIN_UP) or button_pressed(PIN_KEY1):
-                page_idx = (page_idx - 1) % len(PAGES)
-                last_button = now
-            elif button_pressed(PIN_DOWN) or button_pressed(PIN_KEY2):
-                page_idx = (page_idx + 1) % len(PAGES)
-                last_button = now
-            elif button_pressed(PIN_PRESS):
-                last_button = now
-        render_page(lcd, PAGES[page_idx], prev, curr, dt)
+        render_screen(lcd, prev, curr, dt)
         prev = curr
         prev_t = now
         time.sleep(REFRESH_SEC)
