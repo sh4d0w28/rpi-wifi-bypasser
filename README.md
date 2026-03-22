@@ -16,6 +16,8 @@ Changes in this version:
   - YouTube RTMP TCP latency
   - live wlan1 RX/TX link throughput
   - NetworkManager connectivity state / captive portal suspicion
+- LCD pages switch on joystick `PRESS`
+- LCD shows a red `AUTH ACTION REQUIRED` warning when NetworkManager reports captive-portal state
 - Optional captive-portal action hook:
   - Set `CAPTIVE_PORTAL_ACK_CMD` to a site-specific command or script
   - Press `KEY3` on the HAT or use the web button to run it when a portal is suspected
@@ -37,4 +39,3 @@ Diagnostics env vars:
 - `YOUTUBE_PING_HOST` default: `www.youtube.com`
 - `YOUTUBE_RTMP_HOST` default: `a.rtmp.youtube.com`
 - `YOUTUBE_RTMP_PORT` default: `1935`
-- `PAGE_ROTATE_SEC` default: `6`

@@ -48,7 +48,6 @@ CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
 YOUTUBE_PING_HOST = os.environ.get("YOUTUBE_PING_HOST", "www.youtube.com")
 YOUTUBE_RTMP_HOST = os.environ.get("YOUTUBE_RTMP_HOST", "a.rtmp.youtube.com")
 YOUTUBE_RTMP_PORT = int(os.environ.get("YOUTUBE_RTMP_PORT", "1935"))
-PAGE_ROTATE_SEC = float(os.environ.get("PAGE_ROTATE_SEC", "6.0"))
 PIN_UP = 6
 PIN_DOWN = 19
 PIN_LEFT = 5
@@ -388,6 +387,16 @@ def render_inputs_probe(draw, state):
         fill = (120, 255, 160) if state["portal_ack_last"]["ok"] else (255, 96, 96)
         draw.text((3, 107), msg, font=FONT, fill=fill)
 
+def render_portal_warning(draw, state):
+    if not state["probe"]["portal_suspected"]:
+        return
+
+    draw.rectangle((0, 50, 127, 78), fill=(110, 0, 0))
+    draw.line((0, 50, 127, 50), fill=(255, 96, 96), width=1)
+    draw.line((0, 78, 127, 78), fill=(255, 96, 96), width=1)
+    draw.text((8, 56), "AUTH ACTION", font=FONT, fill=(255, 230, 230))
+    draw.text((24, 67), "REQUIRED", font=FONT, fill=(255, 230, 230))
+
 def render_screen(lcd, state):
     image = Image.new("RGB", (128, 128), "BLACK")
     draw = ImageDraw.Draw(image)
@@ -400,6 +409,7 @@ def render_screen(lcd, state):
         render_overview(draw, state)
     else:
         render_inputs_probe(draw, state)
+    render_portal_warning(draw, state)
 
     lcd.LCD_ShowImage(image.rotate(90), 0, 0)
 
@@ -460,7 +470,6 @@ def main():
     }
     portal_ack_last = None
     page = 0
-    manual_page_until = 0.0
     last_display_at = 0.0
     while True:
         now = time.time()
@@ -494,12 +503,8 @@ def main():
                 last_event = name
                 last_event_ts = event_ts
                 logging.info("Button pressed: %s count=%d", name, button_counts[name])
-                if name in ("LEFT", "KEY1"):
-                    page = (page - 1) % 2
-                    manual_page_until = event_ts + PAGE_ROTATE_SEC * 2
-                elif name in ("RIGHT", "KEY2"):
+                if name == "PRESS":
                     page = (page + 1) % 2
-                    manual_page_until = event_ts + PAGE_ROTATE_SEC * 2
         else:
             for name, is_pressed in button_states.items():
                 if is_pressed and not button_states_prev[name]:
@@ -508,12 +513,8 @@ def main():
                     last_event = name
                     last_event_ts = now
                     logging.info("Button pressed: %s count=%d", name, button_counts[name])
-                    if name in ("LEFT", "KEY1"):
-                        page = (page - 1) % 2
-                        manual_page_until = now + PAGE_ROTATE_SEC * 2
-                    elif name in ("RIGHT", "KEY2"):
+                    if name == "PRESS":
                         page = (page + 1) % 2
-                        manual_page_until = now + PAGE_ROTATE_SEC * 2
                 button_states_prev[name] = is_pressed
 
         if now - probe_cache["last_run"] >= PROBE_INTERVAL_SEC:
@@ -534,9 +535,6 @@ def main():
                 portal_ack_last["ok"],
                 portal_ack_last["message"],
             )
-
-        if manual_page_until <= now:
-            page = int(now / PAGE_ROTATE_SEC) % 2
 
         state = {
             "page": page,
