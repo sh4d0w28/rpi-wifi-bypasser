@@ -130,6 +130,39 @@
       min-height: 1.2em;
       font-size: 14px;
     }
+    .diag-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .diag-pill {
+      border: 1px solid var(--field-border);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(15, 23, 42, 0.72);
+    }
+    .diag-pill strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+    .button-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .button-state {
+      border: 1px solid var(--field-border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: rgba(15, 23, 42, 0.72);
+      color: var(--muted);
+    }
+    .button-state.is-pressed {
+      border-color: rgba(52, 211, 153, 0.7);
+      color: var(--success);
+    }
 
     @media (max-width: 700px) {
       table, thead, tbody, th, td, tr { display: block; }
@@ -180,6 +213,42 @@
       <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
       <p><strong>Active uplink:</strong> <span class="mono">{{ active.name or 'none' }}</span></p>
       <p><strong>State:</strong> <span class="mono">{{ active.state }}</span></p>
+      {% if runtime %}
+      <div class="diag-grid">
+        <div class="diag-pill">
+          <strong>YouTube ping</strong>
+          <span class="mono">{{ '%.0f ms'|format(runtime.probe.youtube_ping_ms) if runtime.probe and runtime.probe.youtube_ping_ms is not none else '-' }}</span>
+        </div>
+        <div class="diag-pill">
+          <strong>RTMP TCP</strong>
+          <span class="mono">{{ '%.0f ms'|format(runtime.probe.youtube_rtmp_ms) if runtime.probe and runtime.probe.youtube_rtmp_ms is not none else '-' }}</span>
+        </div>
+        <div class="diag-pill">
+          <strong>Link RX</strong>
+          <span class="mono">{{ '%.1f KB/s'|format((runtime.rx1ps or 0) / 1024) }}</span>
+        </div>
+        <div class="diag-pill">
+          <strong>Link TX</strong>
+          <span class="mono">{{ '%.1f KB/s'|format((runtime.tx1ps or 0) / 1024) }}</span>
+        </div>
+      </div>
+      <p><strong>Connectivity:</strong> <span class="mono">{{ runtime.probe.connectivity if runtime.probe else 'unknown' }}</span></p>
+      <p><strong>Captive portal:</strong> <span class="{{ 'err' if runtime.probe and runtime.probe.portal_suspected else 'ok' if runtime.probe and runtime.probe.internet_ok else '' }}">{{ 'suspected' if runtime.probe and runtime.probe.portal_suspected else 'online' if runtime.probe and runtime.probe.internet_ok else 'offline / unknown' }}</span></p>
+      <p><strong>Last button event:</strong> <span class="mono">{{ runtime.buttons.last_event if runtime.buttons and runtime.buttons.last_event else '-' }}</span></p>
+      <div class="button-grid">
+        {% for name, pressed in runtime.buttons.states.items() if runtime.buttons and runtime.buttons.states %}
+        <div class="button-state {{ 'is-pressed' if pressed else '' }}">
+          <strong>{{ name }}</strong>
+          <span class="mono">{{ 'pressed' if pressed else 'idle' }} / {{ runtime.buttons.counts[name] }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% if portal_ack_available %}
+      <form method="post" action="/portal-ack" style="margin-top:12px;">
+        <button type="submit" class="secondary-button">Run portal action</button>
+      </form>
+      {% endif %}
+      {% endif %}
       <form method="post" action="/disconnect">
         <button type="submit">Disconnect wlan1</button>
       </form>
@@ -223,7 +292,7 @@
           data-auth-type="{{ item.saved_auth_type or item.auth_type }}"
           data-password="{{ item.saved_password_value }}">
           {{ item.ssid }} ({{ item.signal }}%)
-          {% if item.saved_password %}<span class="saved-badge">🔑 saved</span>{% endif %}
+          {% if item.saved_password %}<span class="saved-badge">saved</span>{% endif %}
         </button>
         {% endfor %}
       </div>
@@ -251,7 +320,7 @@
           data-password="{{ item.saved_password_value }}">
           <td data-label="SSID">{{ item.ssid }}</td>
           <td data-label="Security">{{ item.security }}</td>
-          <td data-label="Saved">{% if item.saved_password %}🔑 Saved{% else %}-{% endif %}</td>
+          <td data-label="Saved">{% if item.saved_password %}Saved{% else %}-{% endif %}</td>
           <td data-label="Signal" class="signal">{{ item.signal }}%</td>
         </tr>
         {% endfor %}

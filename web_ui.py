@@ -12,6 +12,8 @@ APP.secret_key = os.environ.get("FLASK_SECRET", "rpi-ap-tools")
 WLAN_IFACE = os.environ.get("WLAN1_IFACE", "wlan1")
 HOSTAPD_CONF = Path(os.environ.get("HOSTAPD_CONF", "/etc/hostapd/hostapd.conf"))
 WIFI_DB_PATH = Path(os.environ.get("WIFI_DB_PATH", "/etc/rpi_ap_tools_wifi_db.json"))
+STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
+CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
 
 
 def run(cmd, check=True):
@@ -186,9 +188,40 @@ def get_ip(device):
     return m.group(1) if m else "-"
 
 
+def load_runtime_status():
+    if not STATUS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def run_portal_ack():
+    if not CAPTIVE_PORTAL_ACK_CMD:
+        return False, "No captive portal action configured"
+    try:
+        proc = subprocess.run(
+            CAPTIVE_PORTAL_ACK_CMD,
+            text=True,
+            capture_output=True,
+            shell=True,
+            check=False,
+            timeout=20,
+        )
+        message = proc.stdout.strip() or proc.stderr.strip() or "Portal action finished"
+        return proc.returncode == 0, message
+    except subprocess.TimeoutExpired:
+        return False, "Portal action timed out"
+    except OSError as exc:
+        return False, str(exc)
+
+
 @APP.route("/", methods=["GET"])
 def index():
     wifi_list = scan_wifi()
+    runtime = load_runtime_status()
     return render_template(
         "index.html",
         ap_name=get_ap_name(),
@@ -197,6 +230,8 @@ def index():
         wlan1_ip=get_ip(WLAN_IFACE),
         wlan0_ip=get_ip("wlan0"),
         top_wifi=wifi_list[:6],
+        runtime=runtime,
+        portal_ack_available=bool(CAPTIVE_PORTAL_ACK_CMD),
     )
 
 
@@ -233,6 +268,13 @@ def disconnect():
         flash(proc.stdout.strip() or proc.stderr.strip() or "Disconnected", "success" if proc.returncode == 0 else "error")
     else:
         flash("No active wlan1 connection", "error")
+    return redirect(url_for("index"))
+
+
+@APP.route("/portal-ack", methods=["POST"])
+def portal_ack():
+    ok, msg = run_portal_ack()
+    flash(msg, "success" if ok else "error")
     return redirect(url_for("index"))
 
 
