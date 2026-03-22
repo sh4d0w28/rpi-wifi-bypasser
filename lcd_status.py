@@ -7,6 +7,7 @@ import time
 import socket
 import subprocess
 from collections import deque
+from threading import Lock
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -26,6 +27,10 @@ except Exception as exc:
     raise SystemExit(f"LCD library import failed: {exc}")
 
 WAVESHARE_DEV = None
+BUTTON_STATE_CACHE = {name: False for name in ("UP", "DOWN", "LEFT", "RIGHT", "PRESS", "KEY1", "KEY2", "KEY3")}
+BUTTON_EVENT_QUEUE = deque()
+BUTTON_EVENT_LOCK = Lock()
+BUTTON_EVENT_MODE = False
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(message)s",
@@ -35,6 +40,8 @@ WLAN_AP = os.environ.get("WLAN0_IFACE", "wlan0")
 WLAN_UP = os.environ.get("WLAN1_IFACE", "wlan1")
 HOSTAPD_CONF = Path(os.environ.get("HOSTAPD_CONF", "/etc/hostapd/hostapd.conf"))
 REFRESH_SEC = float(os.environ.get("REFRESH_SEC", "1.0"))
+BUTTON_POLL_SEC = float(os.environ.get("BUTTON_POLL_SEC", "0.05"))
+DISPLAY_REFRESH_SEC = float(os.environ.get("DISPLAY_REFRESH_SEC", "0.15"))
 PROBE_INTERVAL_SEC = float(os.environ.get("PROBE_INTERVAL_SEC", "15.0"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
@@ -62,6 +69,11 @@ BUTTON_PINS = {
     "KEY2": PIN_KEY2,
     "KEY3": PIN_KEY3,
 }
+
+def enqueue_button_event(name, is_pressed):
+    with BUTTON_EVENT_LOCK:
+        BUTTON_STATE_CACHE[name] = is_pressed
+        BUTTON_EVENT_QUEUE.append((time.time(), name, is_pressed))
 
 def run(cmd):
     return subprocess.run(cmd, text=True, capture_output=True, check=False)
@@ -202,7 +214,16 @@ def draw_label_value(draw, x, y, label, value, value_fill="WHITE", gap=22):
     draw.text((x + gap, y), value, font=FONT, fill=value_fill)
 
 def read_button_states():
+    if BUTTON_EVENT_MODE:
+        with BUTTON_EVENT_LOCK:
+            return dict(BUTTON_STATE_CACHE)
     return {name: button_pressed(name, pin) for name, pin in BUTTON_PINS.items()}
+
+def drain_button_events():
+    with BUTTON_EVENT_LOCK:
+        events = list(BUTTON_EVENT_QUEUE)
+        BUTTON_EVENT_QUEUE.clear()
+    return events
 
 def attach_waveshare_device(lcd):
     global WAVESHARE_DEV
@@ -222,6 +243,33 @@ def attach_waveshare_device(lcd):
             if hasattr(value, "digital_read") and hasattr(value, "GPIO_KEY_UP_PIN"):
                 WAVESHARE_DEV = value
                 return
+
+def get_waveshare_button_device(name):
+    if WAVESHARE_DEV is None:
+        return None
+    attr_name = "GPIO_KEY_PRESS_PIN" if name == "PRESS" else f"GPIO_KEY_{name}_PIN"
+    return getattr(WAVESHARE_DEV, attr_name, None)
+
+def bind_button_callbacks():
+    global BUTTON_EVENT_MODE
+    if WAVESHARE_DEV is None:
+        return
+    bound_any = False
+    for name in BUTTON_PINS:
+        device = get_waveshare_button_device(name)
+        if device is None:
+            continue
+        try:
+            BUTTON_STATE_CACHE[name] = bool(device.is_active)
+        except Exception:
+            BUTTON_STATE_CACHE[name] = False
+        try:
+            device.when_activated = (lambda _device, button_name=name: enqueue_button_event(button_name, True))
+            device.when_deactivated = (lambda _device, button_name=name: enqueue_button_event(button_name, False))
+            bound_any = True
+        except Exception:
+            continue
+    BUTTON_EVENT_MODE = bound_any
 
 def ping_latency_ms(host):
     proc = run(["ping", "-4", "-c", "1", "-W", "1", host])
@@ -359,10 +407,7 @@ def button_pressed(name, pin):
     try:
         if hasattr(config, "digital_read"):
             return config.digital_read(pin) == 0
-        if WAVESHARE_DEV is None:
-            return False
-        attr_name = "GPIO_KEY_PRESS_PIN" if name == "PRESS" else f"GPIO_KEY_{name}_PIN"
-        pin_attr = getattr(WAVESHARE_DEV, attr_name, None)
+        pin_attr = get_waveshare_button_device(name)
         if pin_attr is None:
             return False
         return WAVESHARE_DEV.digital_read(pin_attr) == 0
@@ -380,6 +425,7 @@ def main():
     init_buttons()
     lcd = LCD_1in44.LCD()
     attach_waveshare_device(lcd)
+    bind_button_callbacks()
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     try:
         lcd.LCD_Clear()
@@ -387,10 +433,23 @@ def main():
         pass
     prev = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
     prev_t = time.time()
+    curr = prev
     button_counts = {name: 0 for name in BUTTON_PINS}
     button_states_prev = {name: False for name in BUTTON_PINS}
     last_event = ""
     last_event_ts = 0.0
+    ap_name = read_ap_name()
+    w0 = ip_only(read_ipv4(WLAN_AP))
+    w1 = ip_only(read_ipv4(WLAN_UP))
+    active_wifi = read_active_wifi()
+    cpu_temp = read_cpu_temp_c()
+    cpu_pct = read_cpu_percent()
+    mem_pct = read_mem_percent()
+    rx1ps = 0.0
+    tx1ps = 0.0
+    ap_ok = ap_name != "unknown" and w0 != "-"
+    cl_ok = active_wifi["name"] != "-" and w1 != "-"
+    signal = active_wifi["signal"] if cl_ok else "-"
     probe_cache = {
         "last_run": 0.0,
         "youtube_ping_ms": None,
@@ -402,39 +461,60 @@ def main():
     portal_ack_last = None
     page = 0
     manual_page_until = 0.0
+    last_display_at = 0.0
     while True:
         now = time.time()
-        curr = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
-        dt = max(0.2, now - prev_t)
-        ap_name = read_ap_name()
-        w0 = ip_only(read_ipv4(WLAN_AP))
-        w1 = ip_only(read_ipv4(WLAN_UP))
-        active_wifi = read_active_wifi()
-        cpu_temp = read_cpu_temp_c()
-        cpu_pct = read_cpu_percent()
-        mem_pct = read_mem_percent()
-        rx1ps = max(0, (curr[WLAN_UP]["rx"] - prev[WLAN_UP]["rx"]) / dt)
-        tx1ps = max(0, (curr[WLAN_UP]["tx"] - prev[WLAN_UP]["tx"]) / dt)
-        ap_ok = ap_name != "unknown" and w0 != "-"
-        cl_ok = active_wifi["name"] != "-" and w1 != "-"
-        signal = active_wifi["signal"] if cl_ok else "-"
+        if now - prev_t >= REFRESH_SEC:
+            curr = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
+            dt = max(0.2, now - prev_t)
+            ap_name = read_ap_name()
+            w0 = ip_only(read_ipv4(WLAN_AP))
+            w1 = ip_only(read_ipv4(WLAN_UP))
+            active_wifi = read_active_wifi()
+            cpu_temp = read_cpu_temp_c()
+            cpu_pct = read_cpu_percent()
+            mem_pct = read_mem_percent()
+            rx1ps = max(0, (curr[WLAN_UP]["rx"] - prev[WLAN_UP]["rx"]) / dt)
+            tx1ps = max(0, (curr[WLAN_UP]["tx"] - prev[WLAN_UP]["tx"]) / dt)
+            ap_ok = ap_name != "unknown" and w0 != "-"
+            cl_ok = active_wifi["name"] != "-" and w1 != "-"
+            signal = active_wifi["signal"] if cl_ok else "-"
+            prev = curr
+            prev_t = now
 
         button_states = read_button_states()
         pressed_events = []
-        for name, is_pressed in button_states.items():
-            if is_pressed and not button_states_prev[name]:
+        if BUTTON_EVENT_MODE:
+            for event_ts, name, is_pressed in drain_button_events():
+                button_states_prev[name] = is_pressed
+                if not is_pressed:
+                    continue
                 pressed_events.append(name)
                 button_counts[name] += 1
                 last_event = name
-                last_event_ts = now
+                last_event_ts = event_ts
                 logging.info("Button pressed: %s count=%d", name, button_counts[name])
                 if name in ("LEFT", "KEY1"):
                     page = (page - 1) % 2
-                    manual_page_until = now + PAGE_ROTATE_SEC * 2
+                    manual_page_until = event_ts + PAGE_ROTATE_SEC * 2
                 elif name in ("RIGHT", "KEY2"):
                     page = (page + 1) % 2
-                    manual_page_until = now + PAGE_ROTATE_SEC * 2
-            button_states_prev[name] = is_pressed
+                    manual_page_until = event_ts + PAGE_ROTATE_SEC * 2
+        else:
+            for name, is_pressed in button_states.items():
+                if is_pressed and not button_states_prev[name]:
+                    pressed_events.append(name)
+                    button_counts[name] += 1
+                    last_event = name
+                    last_event_ts = now
+                    logging.info("Button pressed: %s count=%d", name, button_counts[name])
+                    if name in ("LEFT", "KEY1"):
+                        page = (page - 1) % 2
+                        manual_page_until = now + PAGE_ROTATE_SEC * 2
+                    elif name in ("RIGHT", "KEY2"):
+                        page = (page + 1) % 2
+                        manual_page_until = now + PAGE_ROTATE_SEC * 2
+                button_states_prev[name] = is_pressed
 
         if now - probe_cache["last_run"] >= PROBE_INTERVAL_SEC:
             connectivity = read_nm_connectivity()
@@ -484,11 +564,13 @@ def main():
             "updated_at": now,
         }
 
-        render_screen(lcd, state)
-        atomic_write_json(STATUS_PATH, state)
-        prev = curr
-        prev_t = now
-        time.sleep(REFRESH_SEC)
+        should_refresh_display = bool(pressed_events) or (now - last_display_at >= DISPLAY_REFRESH_SEC)
+        if should_refresh_display:
+            render_screen(lcd, state)
+            atomic_write_json(STATUS_PATH, state)
+            last_display_at = now
+
+        time.sleep(BUTTON_POLL_SEC if not BUTTON_EVENT_MODE else min(BUTTON_POLL_SEC, 0.2))
 
 if __name__ == "__main__":
     main()
