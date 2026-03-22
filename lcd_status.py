@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import logging
 import os
 import re
 import time
@@ -25,6 +26,10 @@ except Exception as exc:
     raise SystemExit(f"LCD library import failed: {exc}")
 
 WAVESHARE_DEV = None
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(message)s",
+)
 
 WLAN_AP = os.environ.get("WLAN0_IFACE", "wlan0")
 WLAN_UP = os.environ.get("WLAN1_IFACE", "wlan1")
@@ -422,6 +427,7 @@ def main():
                 button_counts[name] += 1
                 last_event = name
                 last_event_ts = now
+                logging.info("Button pressed: %s count=%d", name, button_counts[name])
                 if name in ("LEFT", "KEY1"):
                     page = (page - 1) % 2
                     manual_page_until = now + PAGE_ROTATE_SEC * 2
@@ -443,6 +449,11 @@ def main():
 
         if "KEY3" in pressed_events and probe_cache["portal_suspected"]:
             portal_ack_last = perform_portal_ack()
+            logging.info(
+                "Portal action via KEY3: ok=%s message=%s",
+                portal_ack_last["ok"],
+                portal_ack_last["message"],
+            )
 
         if manual_page_until <= now:
             page = int(now / PAGE_ROTATE_SEC) % 2
