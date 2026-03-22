@@ -24,7 +24,7 @@ try:
 except Exception as exc:
     raise SystemExit(f"LCD library import failed: {exc}")
 
-BUTTON_DEVICES = {}
+WAVESHARE_DEV = None
 
 WLAN_AP = os.environ.get("WLAN0_IFACE", "wlan0")
 WLAN_UP = os.environ.get("WLAN1_IFACE", "wlan1")
@@ -199,6 +199,25 @@ def draw_label_value(draw, x, y, label, value, value_fill="WHITE", gap=22):
 def read_button_states():
     return {name: button_pressed(name, pin) for name, pin in BUTTON_PINS.items()}
 
+def attach_waveshare_device(lcd):
+    global WAVESHARE_DEV
+    candidates = [
+        lcd,
+        getattr(lcd, "LCD", None),
+        getattr(lcd, "device", None),
+        getattr(lcd, "DEV", None),
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if hasattr(candidate, "digital_read") and hasattr(candidate, "GPIO_KEY_UP_PIN"):
+            WAVESHARE_DEV = candidate
+            return
+        for value in vars(candidate).values() if hasattr(candidate, "__dict__") else []:
+            if hasattr(value, "digital_read") and hasattr(value, "GPIO_KEY_UP_PIN"):
+                WAVESHARE_DEV = value
+                return
+
 def ping_latency_ms(host):
     proc = run(["ping", "-4", "-c", "1", "-W", "1", host])
     if proc.returncode != 0:
@@ -335,8 +354,13 @@ def button_pressed(name, pin):
     try:
         if hasattr(config, "digital_read"):
             return config.digital_read(pin) == 0
-        device = BUTTON_DEVICES.get(name)
-        return bool(device.is_pressed) if device is not None else False
+        if WAVESHARE_DEV is None:
+            return False
+        attr_name = "GPIO_KEY_PRESS_PIN" if name == "PRESS" else f"GPIO_KEY_{name}_PIN"
+        pin_attr = getattr(WAVESHARE_DEV, attr_name, None)
+        if pin_attr is None:
+            return False
+        return WAVESHARE_DEV.digital_read(pin_attr) == 0
     except Exception:
         return False
 
@@ -346,26 +370,11 @@ def init_buttons():
             config.module_init()
     except Exception:
         pass
-    if hasattr(config, "digital_read"):
-        return
-    button_cls = getattr(config, "Button", None)
-    if button_cls is not None:
-        for name, pin in BUTTON_PINS.items():
-            try:
-                BUTTON_DEVICES[name] = button_cls(pin, pull_up=True)
-            except Exception:
-                pass
-        if BUTTON_DEVICES:
-            return
-    for pin in BUTTON_PINS.values():
-        try:
-            config.GPIO.setup(pin, config.GPIO.IN, pull_up_down=config.GPIO.PUD_UP)
-        except Exception:
-            pass
 
 def main():
     init_buttons()
     lcd = LCD_1in44.LCD()
+    attach_waveshare_device(lcd)
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     try:
         lcd.LCD_Clear()
