@@ -24,7 +24,7 @@ try:
 except Exception as exc:
     raise SystemExit(f"LCD library import failed: {exc}")
 
-WAVESHARE_DEV = None
+BUTTON_DEVICES = {}
 
 WLAN_AP = os.environ.get("WLAN0_IFACE", "wlan0")
 WLAN_UP = os.environ.get("WLAN1_IFACE", "wlan1")
@@ -335,28 +335,28 @@ def button_pressed(name, pin):
     try:
         if hasattr(config, "digital_read"):
             return config.digital_read(pin) == 0
-        if WAVESHARE_DEV is None:
-            return False
-        attr_name = "GPIO_KEY_PRESS_PIN" if name == "PRESS" else f"GPIO_KEY_{name}_PIN"
-        pin_attr = getattr(WAVESHARE_DEV, attr_name, None)
-        if pin_attr is None:
-            return False
-        return WAVESHARE_DEV.digital_read(pin_attr) == 0
+        device = BUTTON_DEVICES.get(name)
+        return bool(device.is_pressed) if device is not None else False
     except Exception:
         return False
 
 def init_buttons():
-    global WAVESHARE_DEV
     try:
         if hasattr(config, "module_init"):
             config.module_init()
-        elif hasattr(config, "RaspberryPi"):
-            WAVESHARE_DEV = config.RaspberryPi()
-            WAVESHARE_DEV.module_init()
     except Exception:
         pass
-    if WAVESHARE_DEV is not None:
+    if hasattr(config, "digital_read"):
         return
+    button_cls = getattr(config, "Button", None)
+    if button_cls is not None:
+        for name, pin in BUTTON_PINS.items():
+            try:
+                BUTTON_DEVICES[name] = button_cls(pin, pull_up=True)
+            except Exception:
+                pass
+        if BUTTON_DEVICES:
+            return
     for pin in BUTTON_PINS.values():
         try:
             config.GPIO.setup(pin, config.GPIO.IN, pull_up_down=config.GPIO.PUD_UP)
