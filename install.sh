@@ -13,7 +13,8 @@ sudo cp -r web_ui.py lcd_status.py youtube_live.py templates systemd "$INSTALL_D
 sudo chmod +x "$INSTALL_DIR"/web_ui.py
 sudo chmod +x "$INSTALL_DIR"/lcd_status.py
 sudo chmod +x "$INSTALL_DIR"/youtube_live.py
-sudo python3 -m pip install --upgrade qrcode[pil]
+sudo apt-get update
+sudo apt-get install -y python3-qrcode python3-pil
 
 # Preserve saved Wi-Fi credentials across reinstalls/upgrades.
 sudo mkdir -p "$(dirname "$WIFI_DB_PATH")"
@@ -42,6 +43,29 @@ if [ ! -f "$YOUTUBE_STREAM_STATE_PATH" ]; then
 fi
 sudo chmod 600 "$YOUTUBE_STREAM_STATE_PATH" || true
 
+YOUTUBE_CLIENT_ID_CHECK=$(sudo python3 - <<'PY' "$YOUTUBE_CLIENT_CONFIG_PATH"
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    print("invalid")
+    raise SystemExit(0)
+
+if isinstance(data, dict):
+    for key in ("installed", "web", "tv", "device"):
+        if isinstance(data.get(key), dict):
+            data = data[key]
+            break
+
+client_id = str(data.get("client_id", "")).strip() if isinstance(data, dict) else ""
+print("ready" if client_id else "missing")
+PY
+)
+
 case "$WIFI_DB_PATH" in
   "$INSTALL_DIR"/*)
     echo "WARNING: WIFI_DB_PATH is inside $INSTALL_DIR and may be overwritten by future installs."
@@ -69,6 +93,23 @@ echo "  Wi-Fi DB: $WIFI_DB_PATH"
 echo "  YouTube client config: $YOUTUBE_CLIENT_CONFIG_PATH"
 echo "  YouTube token: $YOUTUBE_TOKEN_PATH"
 echo "  YouTube stream state: $YOUTUBE_STREAM_STATE_PATH"
+case "$YOUTUBE_CLIENT_ID_CHECK" in
+  ready)
+    echo "YouTube OAuth client config: ready"
+    ;;
+  missing)
+    echo "YouTube OAuth client config: missing client_id"
+    echo "  Edit $YOUTUBE_CLIENT_CONFIG_PATH and fill in client_id/client_secret before using YouTube features."
+    ;;
+  *)
+    echo "YouTube OAuth client config: invalid JSON"
+    echo "  Fix $YOUTUBE_CLIENT_CONFIG_PATH before using YouTube features."
+    ;;
+esac
+echo "Next steps:"
+echo "  1. Verify or edit $YOUTUBE_CLIENT_CONFIG_PATH"
+echo "  2. Restart services"
+echo "  3. Open the web UI and use Start YouTube auth"
 echo "Restart services:"
 echo "  sudo systemctl restart rpi-wlan1-ui.service"
 echo "  sudo systemctl restart rpi-lcd-status.service"
