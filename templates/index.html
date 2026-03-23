@@ -313,6 +313,7 @@
     <div class="danger-box">
       <strong>STREAM IS CREATING</strong>
       <p class="help-text">{{ youtube_creation.message }}</p>
+      <p class="help-text">Progress: {{ youtube_creation.progress_pct or 0 }}%</p>
       <p class="help-text">Please wait before starting another stream.</p>
     </div>
     {% endif %}

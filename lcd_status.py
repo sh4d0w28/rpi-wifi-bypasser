@@ -445,11 +445,22 @@ def render_youtube(draw, image, state):
     youtube = state["youtube"]
     creating = (youtube.get("creation") or {}).get("status") == "creating"
     if creating:
+        creation = youtube.get("creation") or {}
+        progress_pct = max(0, min(100, int(creation.get("progress_pct", 0) or 0)))
+        stage_message = fit_text(creation.get("message", "Working"), 18)
+        bar_left = 14
+        bar_top = 74
+        bar_right = 113
+        bar_bottom = 88
+        fill_width = int((bar_right - bar_left - 2) * (progress_pct / 100.0))
         draw.rectangle((4, 22, 123, 104), outline=(255, 96, 96), width=2)
         draw.rectangle((8, 26, 119, 100), outline=(255, 96, 96), width=1)
-        draw.text((14, 38), "STREAM IS", font=FONT, fill=(255, 230, 230))
-        draw.text((16, 52), "CREATING", font=FONT, fill=(255, 230, 230))
-        draw.text((18, 72), "PLEASE WAIT", font=FONT, fill=(255, 210, 210))
+        draw.text((14, 34), "STREAM IS", font=FONT, fill=(255, 230, 230))
+        draw.text((16, 48), "CREATING", font=FONT, fill=(255, 230, 230))
+        draw.text((14, 62), stage_message, font=FONT, fill=(255, 210, 210))
+        draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), outline=(255, 170, 170), width=1)
+        draw.rectangle((bar_left + 1, bar_top + 1, bar_left + 1 + fill_width, bar_bottom - 1), fill=(255, 96, 96))
+        draw.text((44, 91), f"{progress_pct:3d}%", font=FONT, fill=(255, 230, 230))
         draw.text((10, 119), "RIGHT=BACK", font=FONT, fill=(180, 180, 180))
         return
 

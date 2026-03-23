@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -30,6 +31,7 @@ PROXY_PUBLISH_URL_TEMPLATE = os.environ.get("YOUTUBE_PROXY_PUBLISH_URL", "").str
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
+LOGGER = logging.getLogger(__name__)
 
 
 class YouTubeLiveError(RuntimeError):
@@ -170,6 +172,12 @@ def save_creation_state(state):
 
 def clear_creation_state():
     _drop_json(STREAM_CREATE_STATE_PATH)
+
+
+def update_creation_state(**fields):
+    state = load_creation_state()
+    state.update(fields)
+    save_creation_state(state)
 
 
 def _lock_creation():
@@ -348,6 +356,9 @@ def _build_publish_info(stream_name, ingestion_info, ap_ip):
 
 def create_stream_bundle(*, ap_ip="-", title=None):
     title = (title or "").strip() or _default_stream_title()
+    LOGGER.info("YouTube stream creation request started: title=%s ap_ip=%s", title, ap_ip)
+    LOGGER.info("Creating YouTube liveStream resource and waiting for API response")
+    update_creation_state(status="creating", message="Creating stream target", progress_pct=20, stage="stream")
     stream = _api_request(
         "POST",
         "liveStreams",
@@ -365,8 +376,11 @@ def create_stream_bundle(*, ap_ip="-", title=None):
     stream_id = stream.get("id", "")
     ingestion_info = ((stream.get("cdn") or {}).get("ingestionInfo") or {})
     stream_name = ingestion_info.get("streamName", "")
+    LOGGER.info("YouTube liveStream created: stream_id=%s", stream_id or "-")
 
     scheduled_start = (datetime.now(timezone.utc) + timedelta(minutes=2)).replace(microsecond=0).isoformat()
+    LOGGER.info("Creating YouTube liveBroadcast resource and waiting for API response")
+    update_creation_state(status="creating", message="Creating broadcast", progress_pct=45, stage="broadcast")
     broadcast = _api_request(
         "POST",
         "liveBroadcasts",
@@ -388,7 +402,10 @@ def create_stream_bundle(*, ap_ip="-", title=None):
         },
     )
     broadcast_id = broadcast.get("id", "")
+    LOGGER.info("YouTube liveBroadcast created: broadcast_id=%s", broadcast_id or "-")
 
+    LOGGER.info("Binding YouTube broadcast to stream and waiting for API response")
+    update_creation_state(status="creating", message="Binding stream", progress_pct=75, stage="bind")
     _api_request(
         "POST",
         "liveBroadcasts/bind",
@@ -414,56 +431,72 @@ def create_stream_bundle(*, ap_ip="-", title=None):
         **publish,
     }
     save_stream_state(state)
+    LOGGER.info(
+        "YouTube stream bundle ready: title=%s broadcast_id=%s mode=%s",
+        state.get("title", ""),
+        state.get("broadcast_id", ""),
+        state.get("mode", ""),
+    )
     return state
 
 
 def _run_creation_job(ap_ip, title):
     try:
+        LOGGER.info("YouTube async creation job started: ap_ip=%s title=%s", ap_ip, title or "")
         state = create_stream_bundle(ap_ip=ap_ip, title=title)
         save_creation_state(
             {
                 "status": "ready",
                 "message": "Stream created",
+                "progress_pct": 100,
+                "stage": "ready",
                 "finished_at": time.time(),
                 "title": state.get("title", ""),
                 "watch_url": state.get("watch_url", ""),
                 "qr_payload": state.get("qr_payload", ""),
             }
         )
+        LOGGER.info("YouTube async creation job finished successfully: title=%s", state.get("title", ""))
     except Exception as exc:
         save_creation_state(
             {
                 "status": "error",
                 "message": str(exc),
+                "progress_pct": 100,
+                "stage": "error",
                 "finished_at": time.time(),
             }
         )
+        LOGGER.exception("YouTube async creation job failed: %s", exc)
         raise
 
 
 def start_stream_creation(*, ap_ip="-", title=None):
     if creation_in_progress():
+        LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
         raise YouTubeLiveError("Stream creation already in progress")
     fd = _lock_creation()
     try:
         if creation_in_progress():
+            LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
             raise YouTubeLiveError("Stream creation already in progress")
         save_creation_state(
             {
                 "status": "creating",
                 "message": "Stream is creating",
+                "progress_pct": 5,
+                "stage": "queued",
                 "started_at": time.time(),
                 "ap_ip": ap_ip,
                 "title": title or "",
             }
         )
+        LOGGER.info("Starting background YouTube stream creation process: ap_ip=%s title=%s", ap_ip, title or "")
         argv = [sys.executable, str(Path(__file__).resolve()), "create", "--ap-ip", ap_ip or "-"]
         if title:
             argv.extend(["--title", title])
         subprocess.Popen(
             argv,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             close_fds=True,
             start_new_session=True,
@@ -507,5 +540,6 @@ def _parse_cli_args(argv):
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "create":
+        logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
         cli_ap_ip, cli_title = _parse_cli_args(sys.argv[2:])
         _run_creation_job(cli_ap_ip, cli_title)
