@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from flask import Flask, render_template, request, redirect, url_for, flash
 
@@ -14,6 +15,9 @@ HOSTAPD_CONF = Path(os.environ.get("HOSTAPD_CONF", "/etc/hostapd/hostapd.conf"))
 WIFI_DB_PATH = Path(os.environ.get("WIFI_DB_PATH", "/etc/rpi_ap_tools_wifi_db.json"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
+WIFI_SCAN_CACHE_SEC = float(os.environ.get("WIFI_SCAN_CACHE_SEC", "10.0"))
+WIFI_RESCAN_MIN_INTERVAL_SEC = float(os.environ.get("WIFI_RESCAN_MIN_INTERVAL_SEC", "30.0"))
+SCAN_CACHE = {"rows": [], "cached_at": 0.0, "rescanned_at": 0.0}
 
 
 def run(cmd, check=True):
@@ -95,8 +99,14 @@ def infer_auth_type(security: str) -> str:
 
 
 def scan_wifi():
+    now = time.time()
+    if SCAN_CACHE["rows"] and now - SCAN_CACHE["cached_at"] < WIFI_SCAN_CACHE_SEC:
+        return list(SCAN_CACHE["rows"])
+
     wifi_db = load_wifi_db()
-    run(["nmcli", "dev", "wifi", "rescan", "ifname", WLAN_IFACE], check=False)
+    if now - SCAN_CACHE["rescanned_at"] >= WIFI_RESCAN_MIN_INTERVAL_SEC:
+        run(["nmcli", "dev", "wifi", "rescan", "ifname", WLAN_IFACE], check=False)
+        SCAN_CACHE["rescanned_at"] = now
     result = run(["nmcli", "-t", "-f", "SSID,SECURITY,SIGNAL", "dev", "wifi", "list", "ifname", WLAN_IFACE], check=False)
     seen = {}
     for line in result.stdout.splitlines():
@@ -121,6 +131,8 @@ def scan_wifi():
 
     rows = list(seen.values())
     rows.sort(key=lambda x: int(x["signal"]), reverse=True)
+    SCAN_CACHE["rows"] = rows
+    SCAN_CACHE["cached_at"] = now
     return rows
 
 

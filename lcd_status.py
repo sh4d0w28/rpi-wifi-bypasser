@@ -7,7 +7,7 @@ import time
 import socket
 import subprocess
 from collections import deque
-from threading import Lock
+from threading import Event, Lock, Thread
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
@@ -39,10 +39,12 @@ logging.basicConfig(
 WLAN_AP = os.environ.get("WLAN0_IFACE", "wlan0")
 WLAN_UP = os.environ.get("WLAN1_IFACE", "wlan1")
 HOSTAPD_CONF = Path(os.environ.get("HOSTAPD_CONF", "/etc/hostapd/hostapd.conf"))
-REFRESH_SEC = float(os.environ.get("REFRESH_SEC", "1.0"))
+REFRESH_SEC = float(os.environ.get("REFRESH_SEC", "2.0"))
 BUTTON_POLL_SEC = float(os.environ.get("BUTTON_POLL_SEC", "0.05"))
-DISPLAY_REFRESH_SEC = float(os.environ.get("DISPLAY_REFRESH_SEC", "0.15"))
-PROBE_INTERVAL_SEC = float(os.environ.get("PROBE_INTERVAL_SEC", "15.0"))
+DISPLAY_REFRESH_SEC = float(os.environ.get("DISPLAY_REFRESH_SEC", "0.5"))
+PROBE_INTERVAL_SEC = float(os.environ.get("PROBE_INTERVAL_SEC", "60.0"))
+NETWORK_FALLBACK_REFRESH_SEC = float(os.environ.get("NETWORK_FALLBACK_REFRESH_SEC", "30.0"))
+STATUS_WRITE_SEC = float(os.environ.get("STATUS_WRITE_SEC", "5.0"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
 YOUTUBE_PING_HOST = os.environ.get("YOUTUBE_PING_HOST", "www.youtube.com")
@@ -68,6 +70,10 @@ BUTTON_PINS = {
     "KEY2": PIN_KEY2,
     "KEY3": PIN_KEY3,
 }
+STATE_REFRESH_EVENT = Event()
+
+def request_state_refresh():
+    STATE_REFRESH_EVENT.set()
 
 def enqueue_button_event(name, is_pressed):
     with BUTTON_EVENT_LOCK:
@@ -166,6 +172,14 @@ def atomic_write_json(path, payload):
         temp_path.replace(path)
     except Exception:
         pass
+
+def state_signature(state):
+    try:
+        snapshot = dict(state)
+        snapshot.pop("updated_at", None)
+        return json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        return ""
 
 def human_bytes(n):
     units = ["B", "KB", "MB", "GB", "TB"]
@@ -316,6 +330,42 @@ def perform_portal_ack():
     except Exception as exc:
         return {"ok": False, "message": str(exc), "at": time.time()}
 
+def watch_command(cmd, name):
+    while True:
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+            )
+            logging.info("Started monitor %s: %s", name, " ".join(cmd))
+            for line in proc.stdout:
+                if line.strip():
+                    logging.debug("Monitor %s event: %s", name, line.strip())
+                    request_state_refresh()
+        except Exception as exc:
+            logging.warning("Monitor %s failed: %s", name, exc)
+        finally:
+            if proc is not None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=1)
+                except Exception:
+                    pass
+        time.sleep(2.0)
+
+def start_watchers():
+    commands = [
+        (["ip", "monitor", "address", "dev", WLAN_AP], f"{WLAN_AP}-addr"),
+        (["ip", "monitor", "address", "dev", WLAN_UP], f"{WLAN_UP}-addr"),
+        (["nmcli", "monitor"], "nmcli"),
+    ]
+    for cmd, name in commands:
+        Thread(target=watch_command, args=(cmd, name), daemon=True).start()
+
 def render_overview(draw, state):
     ap_ok = state["ap_ok"]
     cl_ok = state["cl_ok"]
@@ -352,40 +402,29 @@ def render_overview(draw, state):
     draw.text((83, 117), "M", font=FONT, fill=(140, 170, 210))
     draw.text((93, 117), mem_text, font=FONT, fill=metric_color(mem_pct, 70, 85))
 
-def render_inputs_probe(draw, state):
+def render_probe(draw, state):
     probe = state["probe"]
-    button_states = state["buttons"]["states"]
-    button_counts = state["buttons"]["counts"]
-    last_event = state["buttons"]["last_event"] or "-"
+    draw.text((3, 3), "PROBE", font=FONT, fill=(140, 170, 210))
+    draw.text((3, 20), fit_text(state["active_wifi"]["name"], 20), font=FONT, fill=(120, 220, 255))
+    draw.text((3, 33), f"IP {fit_text(state['w1'], 16)}", font=FONT, fill=(240, 244, 255))
 
-    draw.text((3, 3), "BTN", font=FONT, fill=(140, 170, 210))
-    draw.text((26, 3), fit_text(last_event, 14), font=FONT, fill=(240, 244, 255))
-    draw.text((3, 18), f"U{int(button_states['UP'])}/{button_counts['UP']:02d}", font=FONT, fill=(120, 255, 160) if button_states["UP"] else (180, 180, 180))
-    draw.text((45, 18), f"D{int(button_states['DOWN'])}/{button_counts['DOWN']:02d}", font=FONT, fill=(120, 255, 160) if button_states["DOWN"] else (180, 180, 180))
-    draw.text((87, 18), f"P{int(button_states['PRESS'])}/{button_counts['PRESS']:02d}", font=FONT, fill=(120, 255, 160) if button_states["PRESS"] else (180, 180, 180))
-    draw.text((3, 31), f"L{int(button_states['LEFT'])}/{button_counts['LEFT']:02d}", font=FONT, fill=(120, 255, 160) if button_states["LEFT"] else (180, 180, 180))
-    draw.text((45, 31), f"R{int(button_states['RIGHT'])}/{button_counts['RIGHT']:02d}", font=FONT, fill=(120, 255, 160) if button_states["RIGHT"] else (180, 180, 180))
-    draw.text((87, 31), f"K3/{button_counts['KEY3']:02d}", font=FONT, fill=(120, 255, 160) if button_states["KEY3"] else (180, 180, 180))
-    draw.text((3, 44), f"K1/{button_counts['KEY1']:02d}", font=FONT, fill=(120, 255, 160) if button_states["KEY1"] else (180, 180, 180))
-    draw.text((45, 44), f"K2/{button_counts['KEY2']:02d}", font=FONT, fill=(120, 255, 160) if button_states["KEY2"] else (180, 180, 180))
-
-    draw.line((2, 58, 125, 58), fill=(24, 44, 68), width=1)
+    draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
     yt_text = "-" if probe["youtube_ping_ms"] is None else f"{probe['youtube_ping_ms']:.0f}ms"
     rtmp_text = "-" if probe["youtube_rtmp_ms"] is None else f"{probe['youtube_rtmp_ms']:.0f}ms"
-    draw_label_value(draw, 3, 64, "YT", yt_text, (120, 220, 255), gap=18)
-    draw_label_value(draw, 64, 64, "RT", rtmp_text, (255, 210, 90), gap=18)
-    draw_label_value(draw, 3, 77, "NET", fit_text(probe["connectivity"], 12), (240, 244, 255), gap=24)
+    draw_label_value(draw, 3, 54, "YT", yt_text, (120, 220, 255), gap=18)
+    draw_label_value(draw, 64, 54, "RT", rtmp_text, (255, 210, 90), gap=18)
+    draw_label_value(draw, 3, 67, "NET", fit_text(probe["connectivity"], 12), (240, 244, 255), gap=24)
 
     portal_fill = (255, 210, 90) if probe["portal_suspected"] else (120, 255, 160) if probe["internet_ok"] else (255, 96, 96)
     portal_text = "PORTAL" if probe["portal_suspected"] else "ONLINE" if probe["internet_ok"] else "OFFLINE"
-    draw.text((3, 92), portal_text, font=FONT, fill=portal_fill)
+    draw.text((3, 82), portal_text, font=FONT, fill=portal_fill)
     ack_hint = "K3=ACK" if state["portal_ack_configured"] else "no-ack"
-    draw.text((58, 92), ack_hint, font=FONT, fill=(180, 180, 180))
+    draw.text((58, 82), ack_hint, font=FONT, fill=(180, 180, 180))
 
     if state["portal_ack_last"]:
         msg = fit_text(state["portal_ack_last"]["message"], 20)
         fill = (120, 255, 160) if state["portal_ack_last"]["ok"] else (255, 96, 96)
-        draw.text((3, 107), msg, font=FONT, fill=fill)
+        draw.text((3, 96), msg, font=FONT, fill=fill)
 
 def render_portal_warning(draw, state):
     if not state["probe"]["portal_suspected"]:
@@ -401,14 +440,14 @@ def render_screen(lcd, state):
     image = Image.new("RGB", (128, 128), "BLACK")
     draw = ImageDraw.Draw(image)
 
-    draw.rectangle((0, 0, 127, 127), fill=(4, 10, 20))
-    draw.rectangle((0, 0, 127, 15), fill=(10, 26, 44))
-    draw.line((0, 16, 127, 16), fill=(28, 60, 92), width=1)
+    draw.rectangle((0, 0, 127, 127), fill="BLACK")
+    draw.rectangle((0, 0, 127, 15), fill=(18, 18, 18))
+    draw.line((0, 16, 127, 16), fill=(64, 64, 64), width=1)
     draw.text((108, 3), f"P{state['page'] + 1}", font=FONT, fill=(180, 180, 180))
     if state["page"] == 0:
         render_overview(draw, state)
     else:
-        render_inputs_probe(draw, state)
+        render_probe(draw, state)
     render_portal_warning(draw, state)
 
     lcd.LCD_ShowImage(image.rotate(90), 0, 0)
@@ -433,6 +472,7 @@ def init_buttons():
 
 def main():
     init_buttons()
+    start_watchers()
     lcd = LCD_1in44.LCD()
     attach_waveshare_device(lcd)
     bind_button_callbacks()
@@ -444,10 +484,7 @@ def main():
     prev = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
     prev_t = time.time()
     curr = prev
-    button_counts = {name: 0 for name in BUTTON_PINS}
     button_states_prev = {name: False for name in BUTTON_PINS}
-    last_event = ""
-    last_event_ts = 0.0
     ap_name = read_ap_name()
     w0 = ip_only(read_ipv4(WLAN_AP))
     w1 = ip_only(read_ipv4(WLAN_UP))
@@ -471,25 +508,37 @@ def main():
     portal_ack_last = None
     page = 0
     last_display_at = 0.0
+    last_network_refresh_at = 0.0
+    last_status_write_at = 0.0
+    last_display_signature = None
+    last_status_signature = None
+    request_state_refresh()
     while True:
         now = time.time()
         if now - prev_t >= REFRESH_SEC:
             curr = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
             dt = max(0.2, now - prev_t)
-            ap_name = read_ap_name()
-            w0 = ip_only(read_ipv4(WLAN_AP))
-            w1 = ip_only(read_ipv4(WLAN_UP))
-            active_wifi = read_active_wifi()
             cpu_temp = read_cpu_temp_c()
             cpu_pct = read_cpu_percent()
             mem_pct = read_mem_percent()
             rx1ps = max(0, (curr[WLAN_UP]["rx"] - prev[WLAN_UP]["rx"]) / dt)
             tx1ps = max(0, (curr[WLAN_UP]["tx"] - prev[WLAN_UP]["tx"]) / dt)
+            prev = curr
+            prev_t = now
+
+        should_refresh_network = STATE_REFRESH_EVENT.is_set() or (
+            now - last_network_refresh_at >= NETWORK_FALLBACK_REFRESH_SEC
+        )
+        if should_refresh_network:
+            STATE_REFRESH_EVENT.clear()
+            ap_name = read_ap_name()
+            w0 = ip_only(read_ipv4(WLAN_AP))
+            w1 = ip_only(read_ipv4(WLAN_UP))
+            active_wifi = read_active_wifi()
             ap_ok = ap_name != "unknown" and w0 != "-"
             cl_ok = active_wifi["name"] != "-" and w1 != "-"
             signal = active_wifi["signal"] if cl_ok else "-"
-            prev = curr
-            prev_t = now
+            last_network_refresh_at = now
 
         button_states = read_button_states()
         pressed_events = []
@@ -499,20 +548,14 @@ def main():
                 if not is_pressed:
                     continue
                 pressed_events.append(name)
-                button_counts[name] += 1
-                last_event = name
-                last_event_ts = event_ts
-                logging.info("Button pressed: %s count=%d", name, button_counts[name])
+                logging.info("Button pressed: %s", name)
                 if name == "PRESS":
                     page = (page + 1) % 2
         else:
             for name, is_pressed in button_states.items():
                 if is_pressed and not button_states_prev[name]:
                     pressed_events.append(name)
-                    button_counts[name] += 1
-                    last_event = name
-                    last_event_ts = now
-                    logging.info("Button pressed: %s count=%d", name, button_counts[name])
+                    logging.info("Button pressed: %s", name)
                     if name == "PRESS":
                         page = (page + 1) % 2
                 button_states_prev[name] = is_pressed
@@ -551,22 +594,27 @@ def main():
             "cl_ok": cl_ok,
             "signal": signal,
             "probe": probe_cache,
-            "buttons": {
-                "states": button_states,
-                "counts": button_counts,
-                "last_event": last_event if now - last_event_ts <= 30 else "",
-                "last_event_age_sec": max(0.0, now - last_event_ts) if last_event_ts else None,
-            },
             "portal_ack_configured": bool(CAPTIVE_PORTAL_ACK_CMD),
             "portal_ack_last": portal_ack_last,
             "updated_at": now,
         }
 
-        should_refresh_display = bool(pressed_events) or (now - last_display_at >= DISPLAY_REFRESH_SEC)
+        signature = state_signature(state)
+        should_refresh_display = bool(pressed_events) or (
+            signature != last_display_signature and now - last_display_at >= DISPLAY_REFRESH_SEC
+        )
         if should_refresh_display:
             render_screen(lcd, state)
-            atomic_write_json(STATUS_PATH, state)
             last_display_at = now
+            last_display_signature = signature
+
+        should_write_status = (
+            signature != last_status_signature and now - last_status_write_at >= STATUS_WRITE_SEC
+        ) or ("KEY3" in pressed_events)
+        if should_write_status:
+            atomic_write_json(STATUS_PATH, state)
+            last_status_write_at = now
+            last_status_signature = signature
 
         time.sleep(BUTTON_POLL_SEC if not BUTTON_EVENT_MODE else min(BUTTON_POLL_SEC, 0.2))
 

@@ -35,7 +35,14 @@ Credential DB:
 
 Diagnostics env vars:
 - `STATUS_PATH` default: `/run/rpi_ap_tools_status.json`
-- `PROBE_INTERVAL_SEC` default: `15`
+- `REFRESH_SEC` default: `2`
+- `DISPLAY_REFRESH_SEC` default: `0.5`
+- `PROBE_INTERVAL_SEC` default: `60`
+- `STATUS_WRITE_SEC` default: `5`
 - `YOUTUBE_PING_HOST` default: `www.youtube.com`
 - `YOUTUBE_RTMP_HOST` default: `a.rtmp.youtube.com`
 - `YOUTUBE_RTMP_PORT` default: `1935`
+
+Web UI scan throttling:
+- `WIFI_SCAN_CACHE_SEC` default: `10`
+- `WIFI_RESCAN_MIN_INTERVAL_SEC` default: `30`
