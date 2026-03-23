@@ -3,6 +3,8 @@ import base64
 import io
 import json
 import os
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -20,6 +22,8 @@ CLIENT_CONFIG_PATH = Path(os.environ.get("YOUTUBE_CLIENT_CONFIG_PATH", "/etc/rpi
 TOKEN_PATH = Path(os.environ.get("YOUTUBE_TOKEN_PATH", "/var/lib/rpi_ap_tools/youtube_token.json"))
 DEVICE_STATE_PATH = Path(os.environ.get("YOUTUBE_DEVICE_STATE_PATH", "/run/rpi_ap_tools_youtube_device.json"))
 STREAM_STATE_PATH = Path(os.environ.get("YOUTUBE_STREAM_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_stream.json"))
+STREAM_CREATE_STATE_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_STATE_PATH", "/run/rpi_ap_tools_youtube_create.json"))
+STREAM_CREATE_LOCK_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_LOCK_PATH", "/run/rpi_ap_tools_youtube_create.lock"))
 STREAM_TITLE_PREFIX = os.environ.get("YOUTUBE_STREAM_TITLE_PREFIX", "RPi Live").strip() or "RPi Live"
 STREAM_PRIVACY_STATUS = os.environ.get("YOUTUBE_STREAM_PRIVACY_STATUS", "unlisted").strip() or "unlisted"
 PROXY_PUBLISH_URL_TEMPLATE = os.environ.get("YOUTUBE_PROXY_PUBLISH_URL", "").strip()
@@ -156,6 +160,34 @@ def save_stream_state(state):
     _save_json(STREAM_STATE_PATH, state)
 
 
+def load_creation_state():
+    return _load_json(STREAM_CREATE_STATE_PATH, {})
+
+
+def save_creation_state(state):
+    _save_json(STREAM_CREATE_STATE_PATH, state)
+
+
+def clear_creation_state():
+    _drop_json(STREAM_CREATE_STATE_PATH)
+
+
+def _lock_creation():
+    STREAM_CREATE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        return os.open(str(STREAM_CREATE_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise YouTubeLiveError("Stream creation already in progress") from exc
+
+
+def _unlock_creation(fd):
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    _drop_json(STREAM_CREATE_LOCK_PATH)
+
+
 def client_ready():
     return bool(load_client_config().get("client_id"))
 
@@ -177,6 +209,7 @@ def get_auth_status():
             "has_refresh_token": bool(token.get("refresh_token")),
             "expires_at": token.get("expires_at"),
         },
+        "creation": load_creation_state(),
     }
 
 
@@ -384,6 +417,66 @@ def create_stream_bundle(*, ap_ip="-", title=None):
     return state
 
 
+def _run_creation_job(ap_ip, title):
+    try:
+        state = create_stream_bundle(ap_ip=ap_ip, title=title)
+        save_creation_state(
+            {
+                "status": "ready",
+                "message": "Stream created",
+                "finished_at": time.time(),
+                "title": state.get("title", ""),
+                "watch_url": state.get("watch_url", ""),
+                "qr_payload": state.get("qr_payload", ""),
+            }
+        )
+    except Exception as exc:
+        save_creation_state(
+            {
+                "status": "error",
+                "message": str(exc),
+                "finished_at": time.time(),
+            }
+        )
+        raise
+
+
+def start_stream_creation(*, ap_ip="-", title=None):
+    if creation_in_progress():
+        raise YouTubeLiveError("Stream creation already in progress")
+    fd = _lock_creation()
+    try:
+        if creation_in_progress():
+            raise YouTubeLiveError("Stream creation already in progress")
+        save_creation_state(
+            {
+                "status": "creating",
+                "message": "Stream is creating",
+                "started_at": time.time(),
+                "ap_ip": ap_ip,
+                "title": title or "",
+            }
+        )
+        argv = [sys.executable, str(Path(__file__).resolve()), "create", "--ap-ip", ap_ip or "-"]
+        if title:
+            argv.extend(["--title", title])
+        subprocess.Popen(
+            argv,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+        )
+    finally:
+        _unlock_creation(fd)
+
+
+def creation_in_progress():
+    state = load_creation_state()
+    return state.get("status") == "creating"
+
+
 def qr_data_uri(payload):
     if not payload or qrcode is None:
         return ""
@@ -392,3 +485,27 @@ def qr_data_uri(payload):
     image.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _parse_cli_args(argv):
+    ap_ip = "-"
+    title = ""
+    idx = 0
+    while idx < len(argv):
+        item = argv[idx]
+        if item == "--ap-ip" and idx + 1 < len(argv):
+            ap_ip = argv[idx + 1]
+            idx += 2
+            continue
+        if item == "--title" and idx + 1 < len(argv):
+            title = argv[idx + 1]
+            idx += 2
+            continue
+        idx += 1
+    return ap_ip, title
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "create":
+        cli_ap_ip, cli_title = _parse_cli_args(sys.argv[2:])
+        _run_creation_job(cli_ap_ip, cli_title)

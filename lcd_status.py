@@ -13,10 +13,11 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from youtube_live import (
     YouTubeLiveError,
-    create_stream_bundle,
     get_auth_status,
+    load_creation_state,
     load_stream_state,
     qrcode as youtube_qrcode,
+    start_stream_creation,
 )
 
 WAVESHARE_PATHS = [
@@ -442,6 +443,16 @@ def build_qr_image(payload, size=116):
 
 def render_youtube(draw, image, state):
     youtube = state["youtube"]
+    creating = (youtube.get("creation") or {}).get("status") == "creating"
+    if creating:
+        draw.rectangle((4, 22, 123, 104), outline=(255, 96, 96), width=2)
+        draw.rectangle((8, 26, 119, 100), outline=(255, 96, 96), width=1)
+        draw.text((14, 38), "STREAM IS", font=FONT, fill=(255, 230, 230))
+        draw.text((16, 52), "CREATING", font=FONT, fill=(255, 230, 230))
+        draw.text((18, 72), "PLEASE WAIT", font=FONT, fill=(255, 210, 210))
+        draw.text((10, 119), "RIGHT=BACK", font=FONT, fill=(180, 180, 180))
+        return
+
     if youtube.get("qr_payload"):
         qr_image = build_qr_image(youtube["qr_payload"])
         if qr_image is not None:
@@ -548,6 +559,7 @@ def main():
     }
     portal_ack_last = None
     youtube_auth = get_auth_status()
+    youtube_creation = load_creation_state()
     youtube_stream = load_stream_state()
     youtube_status_message = "LEFT=YT PRESS=GO"
     page = 0
@@ -568,6 +580,7 @@ def main():
             rx1ps = max(0, (curr[WLAN_UP]["rx"] - prev[WLAN_UP]["rx"]) / dt)
             tx1ps = max(0, (curr[WLAN_UP]["tx"] - prev[WLAN_UP]["tx"]) / dt)
             youtube_auth = get_auth_status()
+            youtube_creation = load_creation_state()
             youtube_stream = load_stream_state()
             prev = curr
             prev_t = now
@@ -601,9 +614,9 @@ def main():
                     page = 0
                 elif name == "PRESS" and page == 2:
                     try:
-                        youtube_stream = create_stream_bundle(ap_ip=w0)
-                        youtube_auth = get_auth_status()
-                        youtube_status_message = "Stream created"
+                        start_stream_creation(ap_ip=w0)
+                        youtube_creation = load_creation_state()
+                        youtube_status_message = "Stream is creating"
                     except YouTubeLiveError as exc:
                         youtube_status_message = fit_text(str(exc), 20)
                 elif name == "PRESS":
@@ -619,9 +632,9 @@ def main():
                         page = 0
                     elif name == "PRESS" and page == 2:
                         try:
-                            youtube_stream = create_stream_bundle(ap_ip=w0)
-                            youtube_auth = get_auth_status()
-                            youtube_status_message = "Stream created"
+                            start_stream_creation(ap_ip=w0)
+                            youtube_creation = load_creation_state()
+                            youtube_status_message = "Stream is creating"
                         except YouTubeLiveError as exc:
                             youtube_status_message = fit_text(str(exc), 20)
                     elif name == "PRESS":
@@ -670,6 +683,7 @@ def main():
                 "watch_url": youtube_stream.get("watch_url", ""),
                 "qr_payload": youtube_stream.get("qr_payload", ""),
                 "mode": youtube_stream.get("mode", "direct"),
+                "creation": youtube_creation,
                 "status_message": youtube_status_message,
             },
             "updated_at": now,

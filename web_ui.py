@@ -8,12 +8,13 @@ from pathlib import Path
 from flask import Flask, render_template, request, redirect, url_for, flash
 from youtube_live import (
     YouTubeLiveError,
-    create_stream_bundle,
     get_auth_status,
+    load_creation_state,
     load_stream_state,
     qr_data_uri,
     start_device_authorization,
     poll_device_authorization,
+    start_stream_creation,
 )
 
 APP = Flask(__name__)
@@ -244,6 +245,7 @@ def index():
     wifi_list = scan_wifi()
     runtime = load_runtime_status()
     youtube_auth = get_auth_status()
+    youtube_creation = load_creation_state()
     youtube_stream = load_stream_state()
     return render_template(
         "index.html",
@@ -256,6 +258,7 @@ def index():
         runtime=runtime,
         portal_ack_available=bool(CAPTIVE_PORTAL_ACK_CMD),
         youtube_auth=youtube_auth,
+        youtube_creation=youtube_creation,
         youtube_stream=youtube_stream,
         youtube_qr=qr_data_uri((youtube_stream or {}).get("qr_payload", "")),
     )
@@ -332,8 +335,8 @@ def youtube_create():
     title = request.form.get("title", "").strip()
     ap_ip = get_ip("wlan0").split("/", 1)[0]
     try:
-        state = create_stream_bundle(ap_ip=ap_ip, title=title)
-        flash(f"YouTube stream created: {state.get('title', 'untitled')}", "success")
+        start_stream_creation(ap_ip=ap_ip, title=title)
+        flash("YouTube stream creation started.", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
     return redirect(url_for("index"))
