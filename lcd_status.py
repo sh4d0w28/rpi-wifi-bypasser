@@ -11,6 +11,13 @@ from threading import Event, Lock, Thread
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+from youtube_live import (
+    YouTubeLiveError,
+    create_stream_bundle,
+    get_auth_status,
+    load_stream_state,
+    qrcode as youtube_qrcode,
+)
 
 WAVESHARE_PATHS = [
     os.environ.get("WAVESHARE_LCD_PATH", "/home/pi/1.44inch-LCD-HAT-Code/RaspberryPi/python"),
@@ -426,6 +433,38 @@ def render_probe(draw, state):
         fill = (120, 255, 160) if state["portal_ack_last"]["ok"] else (255, 96, 96)
         draw.text((3, 96), msg, font=FONT, fill=fill)
 
+def build_qr_image(payload, size=116):
+    if not payload or youtube_qrcode is None:
+        return None
+    image = youtube_qrcode.make(payload).convert("RGB")
+    image = image.resize((size, size))
+    return image
+
+def render_youtube(draw, image, state):
+    youtube = state["youtube"]
+    if youtube.get("qr_payload"):
+        qr_image = build_qr_image(youtube["qr_payload"])
+        if qr_image is not None:
+            image.paste(qr_image, (6, 6))
+            draw.rectangle((0, 118, 127, 127), fill="BLACK")
+            draw.text((4, 119), fit_text(youtube.get("mode", "direct").upper(), 7), font=FONT, fill=(140, 170, 210))
+            draw.text((46, 119), "PRESS=NEW", font=FONT, fill=(180, 180, 180))
+            return
+
+    draw.text((3, 3), "YOUTUBE", font=FONT, fill=(140, 170, 210))
+    auth_text = "READY" if youtube["auth"].get("authorized") else "PENDING" if youtube["auth"].get("device_pending") else "SETUP"
+    auth_fill = (120, 255, 160) if auth_text == "READY" else (255, 210, 90) if auth_text == "PENDING" else (255, 96, 96)
+    draw.text((72, 3), auth_text, font=FONT, fill=auth_fill)
+    draw.text((3, 20), fit_text(youtube.get("title", "No stream yet"), 20), font=FONT, fill=(240, 244, 255))
+    draw.text((3, 33), fit_text(youtube.get("watch_url", "Use web UI"), 20), font=FONT, fill=(120, 220, 255))
+    draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
+    draw.text((3, 56), fit_text(youtube.get("status_message", "LEFT=YT PRESS=GO"), 20), font=FONT, fill=(240, 244, 255))
+    if youtube["auth"].get("device_pending"):
+        code = (youtube["auth"].get("device") or {}).get("user_code", "")
+        draw.text((3, 72), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
+    draw.text((3, 88), "PRESS=create", font=FONT, fill=(180, 180, 180))
+    draw.text((3, 101), "RIGHT=back", font=FONT, fill=(180, 180, 180))
+
 def render_portal_warning(draw, state):
     if not state["probe"]["portal_suspected"]:
         return
@@ -446,8 +485,10 @@ def render_screen(lcd, state):
     draw.text((108, 3), f"P{state['page'] + 1}", font=FONT, fill=(180, 180, 180))
     if state["page"] == 0:
         render_overview(draw, state)
-    else:
+    elif state["page"] == 1:
         render_probe(draw, state)
+    else:
+        render_youtube(draw, image, state)
     render_portal_warning(draw, state)
 
     lcd.LCD_ShowImage(image.rotate(90), 0, 0)
@@ -506,6 +547,9 @@ def main():
         "internet_ok": False,
     }
     portal_ack_last = None
+    youtube_auth = get_auth_status()
+    youtube_stream = load_stream_state()
+    youtube_status_message = "LEFT=YT PRESS=GO"
     page = 0
     last_display_at = 0.0
     last_network_refresh_at = 0.0
@@ -523,6 +567,8 @@ def main():
             mem_pct = read_mem_percent()
             rx1ps = max(0, (curr[WLAN_UP]["rx"] - prev[WLAN_UP]["rx"]) / dt)
             tx1ps = max(0, (curr[WLAN_UP]["tx"] - prev[WLAN_UP]["tx"]) / dt)
+            youtube_auth = get_auth_status()
+            youtube_stream = load_stream_state()
             prev = curr
             prev_t = now
 
@@ -549,14 +595,36 @@ def main():
                     continue
                 pressed_events.append(name)
                 logging.info("Button pressed: %s", name)
-                if name == "PRESS":
+                if name == "LEFT":
+                    page = 2
+                elif name == "RIGHT" and page == 2:
+                    page = 0
+                elif name == "PRESS" and page == 2:
+                    try:
+                        youtube_stream = create_stream_bundle(ap_ip=w0)
+                        youtube_auth = get_auth_status()
+                        youtube_status_message = "Stream created"
+                    except YouTubeLiveError as exc:
+                        youtube_status_message = fit_text(str(exc), 20)
+                elif name == "PRESS":
                     page = (page + 1) % 2
         else:
             for name, is_pressed in button_states.items():
                 if is_pressed and not button_states_prev[name]:
                     pressed_events.append(name)
                     logging.info("Button pressed: %s", name)
-                    if name == "PRESS":
+                    if name == "LEFT":
+                        page = 2
+                    elif name == "RIGHT" and page == 2:
+                        page = 0
+                    elif name == "PRESS" and page == 2:
+                        try:
+                            youtube_stream = create_stream_bundle(ap_ip=w0)
+                            youtube_auth = get_auth_status()
+                            youtube_status_message = "Stream created"
+                        except YouTubeLiveError as exc:
+                            youtube_status_message = fit_text(str(exc), 20)
+                    elif name == "PRESS":
                         page = (page + 1) % 2
                 button_states_prev[name] = is_pressed
 
@@ -596,6 +664,14 @@ def main():
             "probe": probe_cache,
             "portal_ack_configured": bool(CAPTIVE_PORTAL_ACK_CMD),
             "portal_ack_last": portal_ack_last,
+            "youtube": {
+                "auth": youtube_auth,
+                "title": youtube_stream.get("title", ""),
+                "watch_url": youtube_stream.get("watch_url", ""),
+                "qr_payload": youtube_stream.get("qr_payload", ""),
+                "mode": youtube_stream.get("mode", "direct"),
+                "status_message": youtube_status_message,
+            },
             "updated_at": now,
         }
 

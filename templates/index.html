@@ -143,6 +143,29 @@
       display: block;
       margin-bottom: 4px;
     }
+    .qr-card {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--field-border);
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.72);
+    }
+    .qr-card img {
+      display: block;
+      width: 100%;
+      max-width: 280px;
+      margin: 0 auto 12px;
+      background: white;
+      padding: 8px;
+      border-radius: 12px;
+    }
+    .stack-form {
+      margin-top: 10px;
+    }
+    .help-text {
+      font-size: 14px;
+      color: var(--muted);
+    }
     @media (max-width: 700px) {
       table, thead, tbody, th, td, tr { display: block; }
       thead { display: none; }
@@ -267,6 +290,58 @@
         {% endfor %}
       </div>
     </div>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <h2>YouTube Live</h2>
+    {% if not youtube_auth.client_configured %}
+    <p>Missing YouTube OAuth client config. Set <span class="mono">YOUTUBE_CLIENT_CONFIG_PATH</span> or <span class="mono">YOUTUBE_CLIENT_ID</span>.</p>
+    {% else %}
+    <p><strong>Auth:</strong> <span class="mono">{{ 'ready' if youtube_auth.authorized else 'pending' if youtube_auth.device_pending else 'not authorized' }}</span></p>
+    {% if youtube_auth.device_pending %}
+    <div class="qr-card">
+      <p><strong>Code:</strong> <span class="mono">{{ youtube_auth.device.user_code }}</span></p>
+      <p><strong>Open:</strong> <span class="mono">{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}</span></p>
+      <p class="help-text">Authorize the Pi once, then return here and press "Check auth".</p>
+      <form method="post" action="/youtube/device/poll" class="stack-form">
+        <button type="submit">Check auth</button>
+      </form>
+    </div>
+    {% else %}
+    <form method="post" action="/youtube/device/start" class="stack-form">
+      <button type="submit">Start YouTube auth</button>
+    </form>
+    {% endif %}
+
+    <form method="post" action="/youtube/create" class="stack-form">
+      <label>Stream title</label>
+      <input name="title" placeholder="Optional custom title">
+      <button type="submit" {% if not youtube_auth.authorized %}disabled{% endif %}>Create stream</button>
+    </form>
+
+    {% if youtube_stream %}
+    <div class="qr-card">
+      <p><strong>Title:</strong> <span class="mono">{{ youtube_stream.title }}</span></p>
+      <p><strong>Mode:</strong> <span class="mono">{{ youtube_stream.mode }}</span></p>
+      {% if youtube_stream.watch_url %}
+      <p><strong>Watch:</strong> <a href="{{ youtube_stream.watch_url }}" target="_blank" rel="noreferrer">{{ youtube_stream.watch_url }}</a></p>
+      {% endif %}
+      {% if youtube_stream.proxy_publish_url %}
+      <p><strong>Publish URL:</strong> <span class="mono">{{ youtube_stream.proxy_publish_url }}</span></p>
+      <p><strong>Relay target:</strong> <span class="mono">{{ youtube_stream.target_url }}</span></p>
+      {% else %}
+      <p><strong>RTMPS server:</strong> <span class="mono">{{ youtube_stream.rtmps_ingestion_address or youtube_stream.ingestion_address }}</span></p>
+      <p><strong>Stream key:</strong> <span class="mono">{{ youtube_stream.stream_name }}</span></p>
+      {% endif %}
+      {% if youtube_qr %}
+      <img src="{{ youtube_qr }}" alt="Current publish QR">
+      {% else %}
+      <p class="help-text">QR rendering needs the Python <span class="mono">qrcode</span> package.</p>
+      {% endif %}
+      <p><strong>QR payload:</strong> <span class="mono">{{ youtube_stream.qr_payload }}</span></p>
+    </div>
+    {% endif %}
+    {% endif %}
   </div>
 
   <div class="card" style="margin-top:16px;">

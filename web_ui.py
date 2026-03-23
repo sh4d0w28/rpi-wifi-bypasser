@@ -6,6 +6,15 @@ import subprocess
 import time
 from pathlib import Path
 from flask import Flask, render_template, request, redirect, url_for, flash
+from youtube_live import (
+    YouTubeLiveError,
+    create_stream_bundle,
+    get_auth_status,
+    load_stream_state,
+    qr_data_uri,
+    start_device_authorization,
+    poll_device_authorization,
+)
 
 APP = Flask(__name__)
 APP.secret_key = os.environ.get("FLASK_SECRET", "rpi-ap-tools")
@@ -234,6 +243,8 @@ def run_portal_ack():
 def index():
     wifi_list = scan_wifi()
     runtime = load_runtime_status()
+    youtube_auth = get_auth_status()
+    youtube_stream = load_stream_state()
     return render_template(
         "index.html",
         ap_name=get_ap_name(),
@@ -244,6 +255,9 @@ def index():
         top_wifi=wifi_list[:6],
         runtime=runtime,
         portal_ack_available=bool(CAPTIVE_PORTAL_ACK_CMD),
+        youtube_auth=youtube_auth,
+        youtube_stream=youtube_stream,
+        youtube_qr=qr_data_uri((youtube_stream or {}).get("qr_payload", "")),
     )
 
 
@@ -287,6 +301,41 @@ def disconnect():
 def portal_ack():
     ok, msg = run_portal_ack()
     flash(msg, "success" if ok else "error")
+    return redirect(url_for("index"))
+
+
+@APP.route("/youtube/device/start", methods=["POST"])
+def youtube_device_start():
+    try:
+        state = start_device_authorization()
+        flash(
+            f"Open {state.get('verification_url') or state.get('verification_url_complete')}, then enter code {state.get('user_code')}.",
+            "success",
+        )
+    except YouTubeLiveError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("index"))
+
+
+@APP.route("/youtube/device/poll", methods=["POST"])
+def youtube_device_poll():
+    try:
+        poll_device_authorization()
+        flash("YouTube authorization completed.", "success")
+    except YouTubeLiveError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("index"))
+
+
+@APP.route("/youtube/create", methods=["POST"])
+def youtube_create():
+    title = request.form.get("title", "").strip()
+    ap_ip = get_ip("wlan0").split("/", 1)[0]
+    try:
+        state = create_stream_bundle(ap_ip=ap_ip, title=title)
+        flash(f"YouTube stream created: {state.get('title', 'untitled')}", "success")
+    except YouTubeLiveError as exc:
+        flash(str(exc), "error")
     return redirect(url_for("index"))
 
 

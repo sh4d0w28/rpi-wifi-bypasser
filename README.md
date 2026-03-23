@@ -27,11 +27,41 @@ Current web UI behavior:
 - Saved passwords are reused and prefilled for the same SSID next time
 - Wi-Fi rows and quick buttons show a saved-password marker for known SSIDs
 - The password field has a show/hide button
+- YouTube section can:
+  - start Google device authorization
+  - poll for completed authorization
+  - create a YouTube Live stream/broadcast pair
+  - show a QR for the current publish target
+
+LCD YouTube controls:
+- Press `LEFT` to open the YouTube page
+- Press `PRESS` on the YouTube page to create a stream
+- If a stream exists, the YouTube page shows its QR
+
+YouTube config:
+- `YOUTUBE_CLIENT_CONFIG_PATH` default: `/etc/rpi_ap_tools_youtube_client.json`
+- `YOUTUBE_TOKEN_PATH` default: `/var/lib/rpi_ap_tools/youtube_token.json`
+- `YOUTUBE_DEVICE_STATE_PATH` default: `/run/rpi_ap_tools_youtube_device.json`
+- `YOUTUBE_STREAM_STATE_PATH` default: `/var/lib/rpi_ap_tools/youtube_stream.json`
+- `YOUTUBE_STREAM_TITLE_PREFIX` default: `RPi Live`
+- `YOUTUBE_STREAM_PRIVACY_STATUS` default: `unlisted`
+- Optional proxy publish URL template:
+  - `YOUTUBE_PROXY_PUBLISH_URL`
+  - Example: `rtmp://{ap_ip}:7777/live`
+  - This only changes the published QR/payload and relay target metadata; an actual local RTMP relay is still required separately.
 
 Credential DB:
 - Default path: `/etc/rpi_ap_tools_wifi_db.json`
 - Override with env var: `WIFI_DB_PATH`
 - Installer preserves the DB and does not overwrite existing saved passwords
+
+Suggested storage layout:
+- `/etc`
+  - static config such as OAuth client config
+- `/var/lib/rpi_ap_tools`
+  - persistent secret/state such as YouTube token and last stream metadata
+- `/run`
+  - transient runtime state
 
 Diagnostics env vars:
 - `STATUS_PATH` default: `/run/rpi_ap_tools_status.json`
