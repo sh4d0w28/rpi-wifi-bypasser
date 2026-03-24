@@ -7,8 +7,7 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0b1220;
-      --bg-accent: radial-gradient(circle at top, rgba(56, 189, 248, 0.14), transparent 38%), linear-gradient(180deg, #111827 0%, #020617 100%);
+      --bg: #111111;
       --card: rgba(15, 23, 42, 0.92);
       --card-border: #334155;
       --text: #e5eefc;
@@ -33,7 +32,7 @@
       font-family: "Segoe UI", Arial, sans-serif;
       margin: 16px;
       max-width: 980px;
-      background: var(--bg-accent), var(--bg);
+      background: var(--bg);
       color: var(--text);
     }
     h1, h2, h3 { color: var(--text); }
@@ -71,10 +70,8 @@
       border-color: transparent;
       color: var(--button-text);
       font-weight: 600;
-      transition: background 0.15s ease, transform 0.15s ease;
     }
     button:hover { background: var(--button-hover); }
-    button:active { transform: translateY(1px); }
     .mono { font-family: Consolas, "Courier New", monospace; color: var(--text); }
     .ok { color: var(--success); }
     .err { color: var(--error); }
@@ -90,6 +87,34 @@
       width: auto;
     }
     .chip:hover { background: var(--chip-hover); }
+    .saved-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 8px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(52, 211, 153, 0.14);
+      color: #a7f3d0;
+      font-size: 12px;
+      vertical-align: middle;
+    }
+    .field-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .field-row input {
+      flex: 1;
+    }
+    .secondary-button {
+      width: auto;
+      min-width: 110px;
+      background: var(--chip);
+      color: var(--text);
+      border: 1px solid var(--field-border);
+    }
+    .secondary-button:hover { background: var(--chip-hover); }
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 10px 8px; border-bottom: 1px solid var(--table-border); text-align: left; }
     th { color: var(--text); }
@@ -102,7 +127,56 @@
       min-height: 1.2em;
       font-size: 14px;
     }
-
+    .diag-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .diag-pill {
+      border: 1px solid var(--field-border);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(15, 23, 42, 0.72);
+    }
+    .diag-pill strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+    .qr-card {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--field-border);
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.72);
+    }
+    .qr-card img {
+      display: block;
+      width: 100%;
+      max-width: 280px;
+      margin: 0 auto 12px;
+      background: white;
+      padding: 8px;
+      border-radius: 12px;
+    }
+    .stack-form {
+      margin-top: 10px;
+    }
+    .help-text {
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .danger-box {
+      margin-top: 12px;
+      padding: 12px;
+      border: 3px double #ff5f5f;
+      border-radius: 12px;
+      background: rgba(96, 0, 0, 0.22);
+      color: #ffd4d4;
+    }
+    .danger-box strong {
+      color: #ffd4d4;
+    }
     @media (max-width: 700px) {
       table, thead, tbody, th, td, tr { display: block; }
       thead { display: none; }
@@ -121,6 +195,12 @@
         content: attr(data-label) ": ";
         font-weight: bold;
         color: var(--text);
+      }
+      .field-row {
+        display: block;
+      }
+      .secondary-button {
+        width: 100%;
       }
     }
   </style>
@@ -146,6 +226,33 @@
       <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
       <p><strong>Active uplink:</strong> <span class="mono">{{ active.name or 'none' }}</span></p>
       <p><strong>State:</strong> <span class="mono">{{ active.state }}</span></p>
+      {% if runtime %}
+      <div class="diag-grid">
+        <div class="diag-pill">
+          <strong>YouTube ping</strong>
+          <span class="mono">{{ '%.0f ms'|format(runtime.probe.youtube_ping_ms) if runtime.probe and runtime.probe.youtube_ping_ms is not none else '-' }}</span>
+        </div>
+        <div class="diag-pill">
+          <strong>RTMP TCP</strong>
+          <span class="mono">{{ '%.0f ms'|format(runtime.probe.youtube_rtmp_ms) if runtime.probe and runtime.probe.youtube_rtmp_ms is not none else '-' }}</span>
+        </div>
+        <div class="diag-pill">
+          <strong>Link RX</strong>
+          <span class="mono">{{ '%.1f KB/s'|format((runtime.rx1ps or 0) / 1024) }}</span>
+        </div>
+        <div class="diag-pill">
+          <strong>Link TX</strong>
+          <span class="mono">{{ '%.1f KB/s'|format((runtime.tx1ps or 0) / 1024) }}</span>
+        </div>
+      </div>
+      <p><strong>Connectivity:</strong> <span class="mono">{{ runtime.probe.connectivity if runtime.probe else 'unknown' }}</span></p>
+      <p><strong>Captive portal:</strong> <span class="{{ 'err' if runtime.probe and runtime.probe.portal_suspected else 'ok' if runtime.probe and runtime.probe.internet_ok else '' }}">{{ 'suspected' if runtime.probe and runtime.probe.portal_suspected else 'online' if runtime.probe and runtime.probe.internet_ok else 'offline / unknown' }}</span></p>
+      {% if portal_ack_available %}
+      <form method="post" action="/portal-ack" style="margin-top:12px;">
+        <button type="submit" class="secondary-button">Run portal action</button>
+      </form>
+      {% endif %}
+      {% endif %}
       <form method="post" action="/disconnect">
         <button type="submit">Disconnect wlan1</button>
       </form>
@@ -163,7 +270,10 @@
         </datalist>
 
         <label>Password</label>
-        <input id="password" name="password" type="password" placeholder="Password">
+        <div class="field-row">
+          <input id="password" name="password" type="password" placeholder="Password">
+          <button id="toggle-password" class="secondary-button" type="button">Show</button>
+        </div>
 
         <label>Auth type</label>
         <select id="auth_type" name="auth_type">
@@ -183,8 +293,10 @@
           type="button"
           class="chip js-prefill"
           data-ssid="{{ item.ssid }}"
-          data-auth-type="{{ item.auth_type }}">
+          data-auth-type="{{ item.saved_auth_type or item.auth_type }}"
+          data-password="{{ item.saved_password_value }}">
           {{ item.ssid }} ({{ item.signal }}%)
+          {% if item.saved_password %}<span class="saved-badge">saved</span>{% endif %}
         </button>
         {% endfor %}
       </div>
@@ -192,13 +304,74 @@
   </div>
 
   <div class="card" style="margin-top:16px;">
+    <h2>YouTube Live</h2>
+    {% if not youtube_auth.client_configured %}
+    <p>Missing YouTube OAuth client config. Set <span class="mono">YOUTUBE_CLIENT_CONFIG_PATH</span> or <span class="mono">YOUTUBE_CLIENT_ID</span>.</p>
+    {% else %}
+    <p><strong>Auth:</strong> <span class="mono">{{ 'ready' if youtube_auth.authorized else 'pending' if youtube_auth.device_pending else 'not authorized' }}</span></p>
+    {% if youtube_creation and youtube_creation.status == 'creating' %}
+    <div class="danger-box">
+      <strong>STREAM IS CREATING</strong>
+      <p class="help-text">{{ youtube_creation.message }}</p>
+      <p class="help-text">Progress: {{ youtube_creation.progress_pct or 0 }}%</p>
+      <p class="help-text">Please wait before starting another stream.</p>
+    </div>
+    {% endif %}
+    {% if youtube_auth.device_pending %}
+    <div class="qr-card">
+      <p><strong>Code:</strong> <span class="mono">{{ youtube_auth.device.user_code }}</span></p>
+      <p><strong>Open:</strong> <span class="mono">{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}</span></p>
+      <p class="help-text">Authorize the Pi once, then return here and press "Check auth".</p>
+      <form method="post" action="/youtube/device/poll" class="stack-form">
+        <button type="submit">Check auth</button>
+      </form>
+    </div>
+    {% else %}
+    <form method="post" action="/youtube/device/start" class="stack-form">
+      <button type="submit">Start YouTube auth</button>
+    </form>
+    {% endif %}
+
+    <form method="post" action="/youtube/create" class="stack-form">
+      <label>Stream title</label>
+      <input name="title" placeholder="Optional custom title">
+      <button type="submit" {% if not youtube_auth.authorized or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
+    </form>
+
+    {% if youtube_stream %}
+    <div class="qr-card">
+      <p><strong>Title:</strong> <span class="mono">{{ youtube_stream.title }}</span></p>
+      <p><strong>Mode:</strong> <span class="mono">{{ youtube_stream.mode }}</span></p>
+      {% if youtube_stream.watch_url %}
+      <p><strong>Watch:</strong> <a href="{{ youtube_stream.watch_url }}" target="_blank" rel="noreferrer">{{ youtube_stream.watch_url }}</a></p>
+      {% endif %}
+      {% if youtube_stream.proxy_publish_url %}
+      <p><strong>Publish URL:</strong> <span class="mono">{{ youtube_stream.proxy_publish_url }}</span></p>
+      <p><strong>Relay target:</strong> <span class="mono">{{ youtube_stream.target_url }}</span></p>
+      {% else %}
+      <p><strong>RTMPS server:</strong> <span class="mono">{{ youtube_stream.rtmps_ingestion_address or youtube_stream.ingestion_address }}</span></p>
+      <p><strong>Stream key:</strong> <span class="mono">{{ youtube_stream.stream_name }}</span></p>
+      {% endif %}
+      {% if youtube_qr %}
+      <img src="{{ youtube_qr }}" alt="Current publish QR">
+      {% else %}
+      <p class="help-text">QR rendering needs the Python <span class="mono">qrcode</span> package.</p>
+      {% endif %}
+      <p><strong>QR payload:</strong> <span class="mono">{{ youtube_stream.qr_payload }}</span></p>
+    </div>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-top:16px;">
     <h2>Visible networks</h2>
-    <p>Tap a row to prefill SSID and auth type.</p>
+    <p>Tap a row to prefill SSID, auth type, and saved password when available.</p>
     <table>
       <thead>
         <tr>
           <th>SSID</th>
           <th>Security</th>
+          <th>Saved</th>
           <th>Signal</th>
         </tr>
       </thead>
@@ -207,9 +380,11 @@
         <tr
           class="clickable js-prefill"
           data-ssid="{{ item.ssid }}"
-          data-auth-type="{{ item.auth_type }}">
+          data-auth-type="{{ item.saved_auth_type or item.auth_type }}"
+          data-password="{{ item.saved_password_value }}">
           <td data-label="SSID">{{ item.ssid }}</td>
           <td data-label="Security">{{ item.security }}</td>
+          <td data-label="Saved">{% if item.saved_password %}Saved{% else %}-{% endif %}</td>
           <td data-label="Signal" class="signal">{{ item.signal }}%</td>
         </tr>
         {% endfor %}
@@ -218,22 +393,37 @@
   </div>
 
 <script>
-function prefillWifi(ssid, authType) {
+function prefillWifi(ssid, authType, password) {
   document.getElementById("ssid").value = ssid || "";
   document.getElementById("auth_type").value = authType || "wpa-psk";
+  document.getElementById("password").value = password || "";
 
   const note = document.getElementById("prefill-note");
   if (note) {
-    note.textContent = ssid ? `Selected ${ssid}. Enter the password if needed.` : "";
+    note.textContent = ssid
+      ? (password ? `Selected ${ssid}. Saved password loaded.` : `Selected ${ssid}. Enter the password if needed.`)
+      : "";
   }
 
   document.getElementById("password").focus();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+document.getElementById("toggle-password").addEventListener("click", () => {
+  const passwordInput = document.getElementById("password");
+  const toggleButton = document.getElementById("toggle-password");
+  const showPassword = passwordInput.type === "password";
+  passwordInput.type = showPassword ? "text" : "password";
+  toggleButton.textContent = showPassword ? "Hide" : "Show";
+});
+
 document.querySelectorAll(".js-prefill").forEach((element) => {
   element.addEventListener("click", () => {
-    prefillWifi(element.dataset.ssid || "", element.dataset.authType || "wpa-psk");
+    prefillWifi(
+      element.dataset.ssid || "",
+      element.dataset.authType || "wpa-psk",
+      element.dataset.password || ""
+    );
   });
 });
 </script>
