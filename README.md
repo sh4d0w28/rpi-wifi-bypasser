@@ -15,12 +15,17 @@ Changes in this version:
   - YouTube ICMP latency
   - YouTube RTMP TCP latency
   - live wlan1 RX/TX link throughput
-  - NetworkManager connectivity state / captive portal suspicion
+  - the Pi's own NetworkManager connectivity state / captive portal suspicion
 - LCD pages switch on joystick `PRESS`
 - LCD shows a red `AUTH ACTION REQUIRED` warning when NetworkManager reports captive-portal state
 - Optional captive-portal action hook:
   - Set `CAPTIVE_PORTAL_ACK_CMD` to a site-specific command or script
   - Press `KEY3` on the HAT or use the web button to run it when a portal is suspected
+- Shared egress helper:
+  - `configure_shared_egress.sh` forces `wlan0` clients behind Pi-managed IPv4 NAT
+  - disables IPv6 on `wlan0` and `wlan1` to avoid downstream devices bypassing the Pi
+  - this is the practical setup when you want captive-portal authorization on the upstream hotspot to apply once for all AP clients
+  - `rpi-shared-egress.service` reapplies that policy at boot
 
 Current web UI behavior:
 - Successful secured Wi-Fi connections save the password in a local JSON DB
@@ -32,6 +37,7 @@ Current web UI behavior:
   - poll for completed authorization
   - create a YouTube Live stream/broadcast pair
   - show a QR for the current publish target
+- Captive-portal status in the UI is only the Pi uplink's status, not a per-client browser/session test for each device behind `wlan0`
 
 LCD YouTube controls:
 - Press `LEFT` to open the YouTube page
@@ -62,6 +68,12 @@ Suggested storage layout:
   - persistent secret/state such as YouTube token and last stream metadata
 - `/run`
   - transient runtime state
+
+Shared egress / captive portal notes:
+- For "authorize once, all devices work", the Pi must be the only upstream client identity.
+- This bundle now enforces that by using IPv4 shared mode on `wlan0` and disabling IPv6.
+- If a captive portal keys only on hotspot MAC/IP, one authorization on the Pi/uplink should then cover all devices behind `wlan0`.
+- If a captive portal keys on browser cookies, per-device TLS interception, or per-device application login, no generic router-side change can fully collapse all devices into one browser session.
 
 Diagnostics env vars:
 - `STATUS_PATH` default: `/run/rpi_ap_tools_status.json`

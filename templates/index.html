@@ -246,7 +246,7 @@
         </div>
       </div>
       <p><strong>Connectivity:</strong> <span class="mono">{{ runtime.probe.connectivity if runtime.probe else 'unknown' }}</span></p>
-      <p><strong>Captive portal:</strong> <span class="{{ 'err' if runtime.probe and runtime.probe.portal_suspected else 'ok' if runtime.probe and runtime.probe.internet_ok else '' }}">{{ 'suspected' if runtime.probe and runtime.probe.portal_suspected else 'online' if runtime.probe and runtime.probe.internet_ok else 'offline / unknown' }}</span></p>
+      <p><strong>Pi uplink portal:</strong> <span class="{{ 'err' if runtime.probe and runtime.probe.portal_suspected else 'ok' if runtime.probe and runtime.probe.internet_ok else '' }}">{{ 'suspected' if runtime.probe and runtime.probe.portal_suspected else 'online' if runtime.probe and runtime.probe.internet_ok else 'offline / unknown' }}</span></p>
       {% if portal_ack_available %}
       <form method="post" action="/portal-ack" style="margin-top:12px;">
         <button type="submit" class="secondary-button">Run portal action</button>
@@ -309,6 +309,14 @@
     <p>Missing YouTube OAuth client config. Set <span class="mono">YOUTUBE_CLIENT_CONFIG_PATH</span> or <span class="mono">YOUTUBE_CLIENT_ID</span>.</p>
     {% else %}
     <p><strong>Auth:</strong> <span class="mono">{{ 'ready' if youtube_auth.authorized else 'pending' if youtube_auth.device_pending else 'not authorized' }}</span></p>
+    {% if youtube_auth.authorized %}
+    <p>
+      <strong>Live access:</strong>
+      <span class="{{ 'ok' if youtube_auth.validation.ok else 'err' }}">
+        {{ youtube_auth.validation.message }}
+      </span>
+    </p>
+    {% endif %}
     {% if youtube_creation and youtube_creation.status == 'creating' %}
     <div class="danger-box">
       <strong>STREAM IS CREATING</strong>
@@ -335,7 +343,7 @@
     <form method="post" action="/youtube/create" class="stack-form">
       <label>Stream title</label>
       <input name="title" placeholder="Optional custom title">
-      <button type="submit" {% if not youtube_auth.authorized or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
+      <button type="submit" {% if not youtube_ready or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
     </form>
 
     {% if youtube_stream %}
