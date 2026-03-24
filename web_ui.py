@@ -334,6 +334,12 @@ def youtube_device_poll():
 def youtube_create():
     title = request.form.get("title", "").strip()
     ap_ip = get_ip("wlan0").split("/", 1)[0]
+    runtime = load_runtime_status()
+    probe = runtime.get("probe", {}) if isinstance(runtime, dict) else {}
+    auth = get_auth_status()
+    if probe.get("auth_required") or not auth.get("authorized"):
+        flash("AUTH FIRST", "error")
+        return redirect(url_for("index"))
     try:
         start_stream_creation(ap_ip=ap_ip, title=title)
         flash("YouTube stream creation started.", "success")

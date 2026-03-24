@@ -6,7 +6,10 @@ import re
 import time
 import socket
 import subprocess
+import urllib.error
+import urllib.request
 from collections import deque
+from datetime import datetime
 from threading import Event, Lock, Thread
 import sys
 from pathlib import Path
@@ -55,6 +58,11 @@ NETWORK_FALLBACK_REFRESH_SEC = float(os.environ.get("NETWORK_FALLBACK_REFRESH_SE
 STATUS_WRITE_SEC = float(os.environ.get("STATUS_WRITE_SEC", "5.0"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
+PORTAL_CAPTURE_URL = os.environ.get("PORTAL_CAPTURE_URL", "http://connectivitycheck.gstatic.com/generate_204").strip()
+PORTAL_CAPTURE_HTML_PATH = Path(os.environ.get("PORTAL_CAPTURE_HTML_PATH", "/run/rpi_ap_tools_captive_portal.html"))
+PORTAL_CAPTURE_META_PATH = Path(os.environ.get("PORTAL_CAPTURE_META_PATH", "/run/rpi_ap_tools_captive_portal.json"))
+PORTAL_CAPTURE_TIMEOUT_SEC = float(os.environ.get("PORTAL_CAPTURE_TIMEOUT_SEC", "15.0"))
+PORTAL_CAPTURE_MAX_BYTES = int(os.environ.get("PORTAL_CAPTURE_MAX_BYTES", str(1024 * 1024)))
 YOUTUBE_PING_HOST = os.environ.get("YOUTUBE_PING_HOST", "www.youtube.com")
 YOUTUBE_RTMP_HOST = os.environ.get("YOUTUBE_RTMP_HOST", "a.rtmp.youtube.com")
 YOUTUBE_RTMP_PORT = int(os.environ.get("YOUTUBE_RTMP_PORT", "1935"))
@@ -180,6 +188,27 @@ def atomic_write_json(path, payload):
         temp_path.replace(path)
     except Exception:
         pass
+
+def atomic_write_text(path, content):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_suffix(path.suffix + ".tmp")
+        temp_path.write_text(content, encoding="utf-8")
+        temp_path.replace(path)
+    except Exception:
+        pass
+
+def sanitize_filename_part(value, default="unknown"):
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", (value or "").strip())
+    cleaned = cleaned.strip("._-")
+    return cleaned or default
+
+def portal_capture_paths(wifi_name, captured_at):
+    stamp = datetime.fromtimestamp(captured_at).strftime("%y_%m_%d_%H:%M:%S")
+    safe_wifi = sanitize_filename_part(wifi_name, default="unknown_wifi")
+    html_path = PORTAL_CAPTURE_HTML_PATH.parent / f"{stamp}_{safe_wifi}_portal.html"
+    meta_path = html_path.with_suffix(".json")
+    return html_path, meta_path
 
 def state_signature(state):
     try:
@@ -338,6 +367,75 @@ def perform_portal_ack():
     except Exception as exc:
         return {"ok": False, "message": str(exc), "at": time.time()}
 
+def capture_portal_response(wifi_name="-"):
+    if not PORTAL_CAPTURE_URL:
+        return {"ok": False, "message": "No portal capture URL configured", "captured_at": time.time()}
+
+    captured_at = time.time()
+    html_path, meta_path = portal_capture_paths(wifi_name, captured_at)
+    request = urllib.request.Request(
+        PORTAL_CAPTURE_URL,
+        headers={
+            "User-Agent": "rpi-wifi-bypasser/1.0",
+            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=PORTAL_CAPTURE_TIMEOUT_SEC) as response:
+            raw = response.read(PORTAL_CAPTURE_MAX_BYTES + 1)
+            if len(raw) > PORTAL_CAPTURE_MAX_BYTES:
+                raw = raw[:PORTAL_CAPTURE_MAX_BYTES]
+            charset = response.headers.get_content_charset() or "utf-8"
+            body = raw.decode(charset, errors="replace")
+            meta = {
+                "ok": True,
+                "captured_at": captured_at,
+                "requested_url": PORTAL_CAPTURE_URL,
+                "final_url": response.geturl(),
+                "status_code": getattr(response, "status", 200),
+                "content_type": response.headers.get_content_type() if response.headers else "",
+                "content_length": len(raw),
+                "wifi_name": wifi_name,
+                "html_path": str(html_path),
+                "meta_path": str(meta_path),
+            }
+            atomic_write_text(html_path, body)
+            atomic_write_json(meta_path, meta)
+            return meta
+    except urllib.error.HTTPError as exc:
+        raw = exc.read(PORTAL_CAPTURE_MAX_BYTES)
+        charset = exc.headers.get_content_charset() if exc.headers else None
+        body = raw.decode(charset or "utf-8", errors="replace")
+        meta = {
+            "ok": False,
+            "captured_at": captured_at,
+            "requested_url": PORTAL_CAPTURE_URL,
+            "final_url": exc.geturl(),
+            "status_code": exc.code,
+            "content_type": exc.headers.get_content_type() if exc.headers else "",
+            "content_length": len(raw),
+            "wifi_name": wifi_name,
+            "html_path": str(html_path),
+            "meta_path": str(meta_path),
+            "message": str(exc),
+        }
+        atomic_write_text(html_path, body)
+        atomic_write_json(meta_path, meta)
+        return meta
+    except Exception as exc:
+        meta = {
+            "ok": False,
+            "captured_at": captured_at,
+            "requested_url": PORTAL_CAPTURE_URL,
+            "wifi_name": wifi_name,
+            "html_path": str(html_path),
+            "meta_path": str(meta_path),
+            "message": str(exc),
+        }
+        atomic_write_json(meta_path, meta)
+        return meta
+
 def watch_command(cmd, name):
     while True:
         proc = None
@@ -464,6 +562,15 @@ def render_youtube(draw, image, state):
         draw.text((10, 119), "RIGHT=BACK", font=FONT, fill=(180, 180, 180))
         return
 
+    if youtube.get("auth_required") and not youtube.get("qr_payload"):
+        draw.rectangle((4, 22, 123, 104), outline=(255, 96, 96), width=2)
+        draw.rectangle((8, 26, 119, 100), outline=(255, 96, 96), width=1)
+        draw.text((22, 40), "AUTH", font=FONT, fill=(255, 230, 230))
+        draw.text((22, 56), "FIRST", font=FONT, fill=(255, 230, 230))
+        draw.text((14, 78), fit_text(youtube.get("status_message", "AUTH FIRST"), 16), font=FONT, fill=(255, 210, 210))
+        draw.text((10, 119), "RIGHT=BACK", font=FONT, fill=(180, 180, 180))
+        return
+
     if youtube.get("qr_payload"):
         qr_image = build_qr_image(youtube["qr_payload"])
         if qr_image is not None:
@@ -488,14 +595,14 @@ def render_youtube(draw, image, state):
     draw.text((3, 101), "RIGHT=back", font=FONT, fill=(180, 180, 180))
 
 def render_portal_warning(draw, state):
-    if not state["probe"]["portal_suspected"]:
+    if not state["probe"].get("auth_required"):
         return
 
     draw.rectangle((0, 50, 127, 78), fill=(110, 0, 0))
     draw.line((0, 50, 127, 50), fill=(255, 96, 96), width=1)
     draw.line((0, 78, 127, 78), fill=(255, 96, 96), width=1)
-    draw.text((8, 56), "AUTH ACTION", font=FONT, fill=(255, 230, 230))
-    draw.text((24, 67), "REQUIRED", font=FONT, fill=(255, 230, 230))
+    draw.text((20, 56), "AUTH", font=FONT, fill=(255, 230, 230))
+    draw.text((20, 67), "FIRST", font=FONT, fill=(255, 230, 230))
 
 def render_screen(lcd, state):
     image = Image.new("RGB", (128, 128), "BLACK")
@@ -567,6 +674,8 @@ def main():
         "connectivity": "unknown",
         "portal_suspected": False,
         "internet_ok": False,
+        "auth_required": False,
+        "portal_capture": {},
     }
     portal_ack_last = None
     youtube_auth = get_auth_status()
@@ -624,12 +733,15 @@ def main():
                 elif name == "RIGHT" and page == 2:
                     page = 0
                 elif name == "PRESS" and page == 2:
-                    try:
-                        start_stream_creation(ap_ip=w0)
-                        youtube_creation = load_creation_state()
-                        youtube_status_message = "Stream is creating"
-                    except YouTubeLiveError as exc:
-                        youtube_status_message = fit_text(str(exc), 20)
+                    if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
+                        youtube_status_message = "AUTH FIRST"
+                    else:
+                        try:
+                            start_stream_creation(ap_ip=w0)
+                            youtube_creation = load_creation_state()
+                            youtube_status_message = "Stream is creating"
+                        except YouTubeLiveError as exc:
+                            youtube_status_message = fit_text(str(exc), 20)
                 elif name == "PRESS":
                     page = (page + 1) % 2
         else:
@@ -642,25 +754,34 @@ def main():
                     elif name == "RIGHT" and page == 2:
                         page = 0
                     elif name == "PRESS" and page == 2:
-                        try:
-                            start_stream_creation(ap_ip=w0)
-                            youtube_creation = load_creation_state()
-                            youtube_status_message = "Stream is creating"
-                        except YouTubeLiveError as exc:
-                            youtube_status_message = fit_text(str(exc), 20)
+                        if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
+                            youtube_status_message = "AUTH FIRST"
+                        else:
+                            try:
+                                start_stream_creation(ap_ip=w0)
+                                youtube_creation = load_creation_state()
+                                youtube_status_message = "Stream is creating"
+                            except YouTubeLiveError as exc:
+                                youtube_status_message = fit_text(str(exc), 20)
                     elif name == "PRESS":
                         page = (page + 1) % 2
                 button_states_prev[name] = is_pressed
 
         if now - probe_cache["last_run"] >= PROBE_INTERVAL_SEC:
             connectivity = read_nm_connectivity()
+            auth_required = connectivity == "portal"
+            portal_capture = probe_cache.get("portal_capture", {})
+            if auth_required:
+                portal_capture = capture_portal_response(active_wifi.get("name", "-"))
             probe_cache = {
                 "last_run": now,
                 "youtube_ping_ms": ping_latency_ms(YOUTUBE_PING_HOST),
                 "youtube_rtmp_ms": tcp_latency_ms(YOUTUBE_RTMP_HOST, YOUTUBE_RTMP_PORT),
                 "connectivity": connectivity,
-                "portal_suspected": connectivity == "portal",
+                "portal_suspected": auth_required,
                 "internet_ok": connectivity == "full",
+                "auth_required": auth_required,
+                "portal_capture": portal_capture,
             }
 
         if "KEY3" in pressed_events and probe_cache["portal_suspected"]:
@@ -695,7 +816,8 @@ def main():
                 "qr_payload": youtube_stream.get("qr_payload", ""),
                 "mode": youtube_stream.get("mode", "direct"),
                 "creation": youtube_creation,
-                "status_message": youtube_status_message,
+                "status_message": "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
+                "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),
             },
             "updated_at": now,
         }

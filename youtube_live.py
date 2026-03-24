@@ -163,7 +163,7 @@ def save_stream_state(state):
 
 
 def load_creation_state():
-    return _load_json(STREAM_CREATE_STATE_PATH, {})
+    return normalize_creation_state(_load_json(STREAM_CREATE_STATE_PATH, {}))
 
 
 def save_creation_state(state):
@@ -178,6 +178,31 @@ def update_creation_state(**fields):
     state = load_creation_state()
     state.update(fields)
     save_creation_state(state)
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def normalize_creation_state(state):
+    if not isinstance(state, dict):
+        return {}
+    if state.get("status") != "creating":
+        return state
+    pid = state.get("pid")
+    if pid and _pid_alive(pid):
+        return state
+    if pid:
+        state = dict(state)
+        state.setdefault("finished_at", time.time())
+        state["status"] = "error"
+        state["stage"] = "error"
+        state["message"] = state.get("message") or "Stream creation stopped"
+    return state
 
 
 def _lock_creation():
@@ -442,6 +467,7 @@ def create_stream_bundle(*, ap_ip="-", title=None):
 
 def _run_creation_job(ap_ip, title):
     try:
+        update_creation_state(pid=os.getpid(), status="creating")
         LOGGER.info("YouTube async creation job started: ap_ip=%s title=%s", ap_ip, title or "")
         state = create_stream_bundle(ap_ip=ap_ip, title=title)
         save_creation_state(
@@ -451,6 +477,7 @@ def _run_creation_job(ap_ip, title):
                 "progress_pct": 100,
                 "stage": "ready",
                 "finished_at": time.time(),
+                "pid": os.getpid(),
                 "title": state.get("title", ""),
                 "watch_url": state.get("watch_url", ""),
                 "qr_payload": state.get("qr_payload", ""),
@@ -465,6 +492,7 @@ def _run_creation_job(ap_ip, title):
                 "progress_pct": 100,
                 "stage": "error",
                 "finished_at": time.time(),
+                "pid": os.getpid(),
             }
         )
         LOGGER.exception("YouTube async creation job failed: %s", exc)
@@ -495,12 +523,13 @@ def start_stream_creation(*, ap_ip="-", title=None):
         argv = [sys.executable, str(Path(__file__).resolve()), "create", "--ap-ip", ap_ip or "-"]
         if title:
             argv.extend(["--title", title])
-        subprocess.Popen(
+        proc = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
             close_fds=True,
             start_new_session=True,
         )
+        update_creation_state(pid=proc.pid)
     finally:
         _unlock_creation(fd)
 
