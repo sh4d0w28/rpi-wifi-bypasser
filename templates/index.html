@@ -359,6 +359,11 @@
       {% if youtube_stream.proxy_publish_url %}
       <p><strong>Publish URL:</strong> <span class="mono">{{ youtube_stream.proxy_publish_url }}</span></p>
       <p><strong>Relay target:</strong> <span class="mono">{{ youtube_stream.target_url }}</span></p>
+      <p><strong>Relay listen:</strong> <span class="mono">{{ youtube_stream.proxy_listen_url }}</span></p>
+      {% if youtube_stream.relay %}
+      <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
+      <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
+      {% endif %}
       {% else %}
       <p><strong>RTMPS server:</strong> <span class="mono">{{ youtube_stream.rtmps_ingestion_address or youtube_stream.ingestion_address }}</span></p>
       <p><strong>Stream key:</strong> <span class="mono">{{ youtube_stream.stream_name }}</span></p>

@@ -36,7 +36,7 @@ Current web UI behavior:
   - start Google device authorization
   - poll for completed authorization
   - create a YouTube Live stream/broadcast pair
-  - show a QR for the current publish target
+  - start a local RTMP passthrough relay on the Pi and show a QR for the current publish target
 - Captive-portal status in the UI is only the Pi uplink's status, not a per-client browser/session test for each device behind `wlan0`
 
 LCD YouTube controls:
@@ -51,10 +51,19 @@ YouTube config:
 - `YOUTUBE_STREAM_STATE_PATH` default: `/var/lib/rpi_ap_tools/youtube_stream.json`
 - `YOUTUBE_STREAM_TITLE_PREFIX` default: `RPi Live`
 - `YOUTUBE_STREAM_PRIVACY_STATUS` default: `unlisted`
-- Optional proxy publish URL template:
+- `YOUTUBE_PROXY_ENABLED` default: `1`
+- Local proxy relay defaults:
+  - publish URL: `rtmp://{ap_ip}:7777/live`
+  - listen URL: `rtmp://0.0.0.0:7777/live`
+  - upstream target: YouTube `ingestionAddress` plus the generated stream key
+  - relay process: `ffmpeg -listen 1 -c copy`
+  - no decode or re-encode is performed, which is the only viable mode for a Pi Zero
+- Optional relay env vars:
   - `YOUTUBE_PROXY_PUBLISH_URL`
-  - Example: `rtmp://{ap_ip}:7777/live`
-  - This only changes the published QR/payload and relay target metadata; an actual local RTMP relay is still required separately.
+  - `YOUTUBE_PROXY_RTMP_PORT`
+  - `YOUTUBE_PROXY_RTMP_APP`
+  - `YOUTUBE_PROXY_FFMPEG_BIN`
+  - `YOUTUBE_RELAY_LOG_PATH`
 
 Credential DB:
 - Default path: `/etc/rpi_ap_tools_wifi_db.json`
@@ -68,6 +77,7 @@ Suggested storage layout:
   - persistent secret/state such as YouTube token and last stream metadata
 - `/run`
   - transient runtime state
+  - relay log such as `/run/rpi_ap_tools_youtube_relay.log`
 
 Shared egress / captive portal notes:
 - For "authorize once, all devices work", the Pi must be the only upstream client identity.

@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -25,9 +26,15 @@ DEVICE_STATE_PATH = Path(os.environ.get("YOUTUBE_DEVICE_STATE_PATH", "/run/rpi_a
 STREAM_STATE_PATH = Path(os.environ.get("YOUTUBE_STREAM_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_stream.json"))
 STREAM_CREATE_STATE_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_STATE_PATH", "/run/rpi_ap_tools_youtube_create.json"))
 STREAM_CREATE_LOCK_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_LOCK_PATH", "/run/rpi_ap_tools_youtube_create.lock"))
+RELAY_STATE_PATH = Path(os.environ.get("YOUTUBE_RELAY_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_relay.json"))
+RELAY_LOG_PATH = Path(os.environ.get("YOUTUBE_RELAY_LOG_PATH", "/run/rpi_ap_tools_youtube_relay.log"))
 STREAM_TITLE_PREFIX = os.environ.get("YOUTUBE_STREAM_TITLE_PREFIX", "RPi Live").strip() or "RPi Live"
 STREAM_PRIVACY_STATUS = os.environ.get("YOUTUBE_STREAM_PRIVACY_STATUS", "unlisted").strip() or "unlisted"
+PROXY_ENABLED = os.environ.get("YOUTUBE_PROXY_ENABLED", "1").strip().lower() not in ("0", "false", "no")
 PROXY_PUBLISH_URL_TEMPLATE = os.environ.get("YOUTUBE_PROXY_PUBLISH_URL", "").strip()
+PROXY_RTMP_PORT = int(os.environ.get("YOUTUBE_PROXY_RTMP_PORT", "7777") or "7777")
+PROXY_RTMP_APP = os.environ.get("YOUTUBE_PROXY_RTMP_APP", "live").strip().strip("/")
+FFMPEG_BIN = os.environ.get("YOUTUBE_PROXY_FFMPEG_BIN", "ffmpeg").strip() or "ffmpeg"
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
@@ -155,11 +162,29 @@ def clear_device_state():
 
 
 def load_stream_state():
-    return _load_json(STREAM_STATE_PATH, {})
+    state = _load_json(STREAM_STATE_PATH, {})
+    if isinstance(state, dict) and state.get("mode") == "proxy":
+        relay = load_relay_state()
+        if relay:
+            state = dict(state)
+            state["relay"] = relay
+    return state
 
 
 def save_stream_state(state):
     _save_json(STREAM_STATE_PATH, state)
+
+
+def load_relay_state():
+    return normalize_relay_state(_load_json(RELAY_STATE_PATH, {}))
+
+
+def save_relay_state(state):
+    _save_json(RELAY_STATE_PATH, state)
+
+
+def clear_relay_state():
+    _drop_json(RELAY_STATE_PATH)
 
 
 def load_creation_state():
@@ -205,6 +230,20 @@ def normalize_creation_state(state):
     return state
 
 
+def normalize_relay_state(state):
+    if not isinstance(state, dict):
+        return {}
+    pid = state.get("pid")
+    if not pid:
+        return state
+    state = dict(state)
+    state["running"] = _pid_alive(pid)
+    if not state["running"] and state.get("status") == "running":
+        state["status"] = "stopped"
+        state.setdefault("stopped_at", time.time())
+    return state
+
+
 def _lock_creation():
     STREAM_CREATE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -245,8 +284,6 @@ def validate_live_access():
             params={
                 "part": "id,status",
                 "broadcastStatus": "all",
-                "broadcastType": "all",
-                "mine": "true",
                 "maxResults": 1,
             },
         )
@@ -417,14 +454,30 @@ def _default_stream_title():
     return f"{STREAM_TITLE_PREFIX} {stamp}"
 
 
+def _proxy_publish_url(ap_ip):
+    if PROXY_PUBLISH_URL_TEMPLATE:
+        return PROXY_PUBLISH_URL_TEMPLATE.format(ap_ip=ap_ip or "")
+    host = ap_ip or "127.0.0.1"
+    if PROXY_RTMP_APP:
+        return f"rtmp://{host}:{PROXY_RTMP_PORT}/{PROXY_RTMP_APP}"
+    return f"rtmp://{host}:{PROXY_RTMP_PORT}"
+
+
+def _proxy_listen_url():
+    if PROXY_RTMP_APP:
+        return f"rtmp://0.0.0.0:{PROXY_RTMP_PORT}/{PROXY_RTMP_APP}"
+    return f"rtmp://0.0.0.0:{PROXY_RTMP_PORT}"
+
+
 def _build_publish_info(stream_name, ingestion_info, ap_ip):
-    rtmps_base = ingestion_info.get("rtmpsIngestionAddress") or ingestion_info.get("ingestionAddress") or ""
-    target_url = f"{rtmps_base.rstrip('/')}/{stream_name}" if rtmps_base and stream_name else ""
+    rtmp_base = ingestion_info.get("ingestionAddress") or ""
+    rtmps_base = ingestion_info.get("rtmpsIngestionAddress") or rtmp_base
+    target_url = f"{rtmp_base.rstrip('/')}/{stream_name}" if rtmp_base and stream_name else ""
     proxy_publish_url = ""
     qr_payload = target_url
     mode = "direct"
-    if PROXY_PUBLISH_URL_TEMPLATE:
-        proxy_publish_url = PROXY_PUBLISH_URL_TEMPLATE.format(ap_ip=ap_ip or "")
+    if PROXY_ENABLED:
+        proxy_publish_url = _proxy_publish_url(ap_ip)
         qr_payload = proxy_publish_url
         mode = "proxy"
     return {
@@ -432,7 +485,82 @@ def _build_publish_info(stream_name, ingestion_info, ap_ip):
         "qr_payload": qr_payload,
         "proxy_publish_url": proxy_publish_url,
         "target_url": target_url,
+        "proxy_listen_url": _proxy_listen_url(),
+        "target_rtmp_base": rtmp_base,
+        "target_rtmps_base": rtmps_base,
     }
+
+
+def _stop_proxy_relay():
+    relay = load_relay_state()
+    pid = relay.get("pid")
+    if not pid or not relay.get("running"):
+        clear_relay_state()
+        return
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+    except OSError:
+        pass
+    save_relay_state(
+        {
+            **relay,
+            "running": False,
+            "status": "stopped",
+            "stopped_at": time.time(),
+        }
+    )
+
+
+def _start_proxy_relay(*, listen_url, target_url, stream_title):
+    if not target_url:
+        raise YouTubeLiveError("Missing YouTube RTMP target for proxy relay")
+    _stop_proxy_relay()
+    RELAY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = RELAY_LOG_PATH.open("ab")
+    argv = [
+        FFMPEG_BIN,
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-listen",
+        "1",
+        "-i",
+        listen_url,
+        "-c",
+        "copy",
+        "-f",
+        "flv",
+        target_url,
+    ]
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except FileNotFoundError as exc:
+        log_handle.close()
+        raise YouTubeLiveError(f"{FFMPEG_BIN} is not installed; proxy relay cannot start") from exc
+    except Exception:
+        log_handle.close()
+        raise
+    relay = {
+        "status": "running",
+        "running": True,
+        "pid": proc.pid,
+        "listen_url": listen_url,
+        "target_url": target_url,
+        "log_path": str(RELAY_LOG_PATH),
+        "stream_title": stream_title,
+        "started_at": time.time(),
+        "ffmpeg_bin": FFMPEG_BIN,
+        "mode": "copy",
+    }
+    save_relay_state(relay)
+    return relay
 
 
 def create_stream_bundle(*, ap_ip="-", title=None):
@@ -511,6 +639,13 @@ def create_stream_bundle(*, ap_ip="-", title=None):
         "ap_ip": ap_ip,
         **publish,
     }
+    _stop_proxy_relay()
+    if state.get("mode") == "proxy":
+        state["relay"] = _start_proxy_relay(
+            listen_url=state.get("proxy_listen_url", ""),
+            target_url=state.get("target_url", ""),
+            stream_title=title,
+        )
     save_stream_state(state)
     LOGGER.info(
         "YouTube stream bundle ready: title=%s broadcast_id=%s mode=%s",
@@ -537,6 +672,7 @@ def _run_creation_job(ap_ip, title):
                 "title": state.get("title", ""),
                 "watch_url": state.get("watch_url", ""),
                 "qr_payload": state.get("qr_payload", ""),
+                "relay_status": ((state.get("relay") or {}).get("status", "")),
             }
         )
         LOGGER.info("YouTube async creation job finished successfully: title=%s", state.get("title", ""))

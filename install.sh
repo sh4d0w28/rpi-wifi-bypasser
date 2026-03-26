@@ -17,7 +17,7 @@ sudo chmod +x "$INSTALL_DIR"/lcd_status.py
 sudo chmod +x "$INSTALL_DIR"/youtube_live.py
 sudo chmod +x "$INSTALL_DIR"/configure_shared_egress.sh
 sudo apt-get update
-sudo apt-get install -y python3-qrcode python3-pil
+sudo apt-get install -y python3-qrcode python3-pil ffmpeg
 
 # Preserve saved Wi-Fi credentials across reinstalls/upgrades.
 sudo mkdir -p "$(dirname "$WIFI_DB_PATH")"
