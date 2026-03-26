@@ -1,0 +1,15 @@
+[Unit]
+Description=RPi shared egress configuration
+After=NetworkManager.service network-online.target
+Wants=NetworkManager.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/rpi_ap_tools/configure_shared_egress.sh
+RemainAfterExit=yes
+User=root
+Environment=WLAN0_IFACE=wlan0
+Environment=WLAN1_IFACE=wlan1
+
+[Install]
+WantedBy=multi-user.target
