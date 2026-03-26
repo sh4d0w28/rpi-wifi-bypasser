@@ -115,6 +115,23 @@
       border: 1px solid var(--field-border);
     }
     .secondary-button:hover { background: var(--chip-hover); }
+    .inline-button {
+      width: auto;
+      min-width: 0;
+      display: inline-block;
+      padding: 6px 10px;
+      margin: 0 0 0 8px;
+      background: var(--chip);
+      color: var(--text);
+      border: 1px solid var(--field-border);
+      vertical-align: middle;
+    }
+    .inline-button:hover { background: var(--chip-hover); }
+    .code-copy {
+      cursor: pointer;
+      text-decoration: underline;
+      text-decoration-style: dotted;
+    }
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 10px 8px; border-bottom: 1px solid var(--table-border); text-align: left; }
     th { color: var(--text); }
@@ -330,8 +347,21 @@
     {% endif %}
     {% if youtube_auth.device_pending %}
     <div class="qr-card">
-      <p><strong>Code:</strong> <span class="mono">{{ youtube_auth.device.user_code }}</span></p>
-      <p><strong>Open:</strong> <span class="mono">{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}</span></p>
+      <p>
+        <strong>Code:</strong>
+        <span id="youtube-device-code" class="mono code-copy" title="Click to copy">{{ youtube_auth.device.user_code }}</span>
+        <button type="button" id="copy-device-code" class="inline-button">Copy</button>
+      </p>
+      <p>
+        <strong>Open:</strong>
+        <a
+          class="mono"
+          href="{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}"
+          target="_blank"
+          rel="noreferrer"
+        >{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}</a>
+      </p>
+      <p id="device-code-copy-status" class="help-text"></p>
       <p class="help-text">Authorize the Pi once, then return here and press "Check auth".</p>
       <form method="post" action="/youtube/device/poll" class="stack-form">
         <button type="submit">Check auth</button>
@@ -432,6 +462,53 @@ document.getElementById("toggle-password").addEventListener("click", () => {
   passwordInput.type = showPassword ? "text" : "password";
   toggleButton.textContent = showPassword ? "Hide" : "Show";
 });
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  const tempInput = document.createElement("input");
+  tempInput.value = text;
+  document.body.appendChild(tempInput);
+  tempInput.select();
+  tempInput.setSelectionRange(0, text.length);
+  const ok = document.execCommand("copy");
+  document.body.removeChild(tempInput);
+  return ok;
+}
+
+const deviceCodeEl = document.getElementById("youtube-device-code");
+const copyDeviceCodeButton = document.getElementById("copy-device-code");
+const deviceCodeCopyStatus = document.getElementById("device-code-copy-status");
+
+async function copyDeviceCode() {
+  if (!deviceCodeEl) {
+    return;
+  }
+  const code = deviceCodeEl.textContent.trim();
+  if (!code) {
+    return;
+  }
+  try {
+    await copyTextToClipboard(code);
+    if (deviceCodeCopyStatus) {
+      deviceCodeCopyStatus.textContent = "Code copied to clipboard.";
+    }
+  } catch (error) {
+    if (deviceCodeCopyStatus) {
+      deviceCodeCopyStatus.textContent = "Clipboard copy failed.";
+    }
+  }
+}
+
+if (deviceCodeEl) {
+  deviceCodeEl.addEventListener("click", copyDeviceCode);
+}
+if (copyDeviceCodeButton) {
+  copyDeviceCodeButton.addEventListener("click", copyDeviceCode);
+}
 
 document.querySelectorAll(".js-prefill").forEach((element) => {
   element.addEventListener("click", () => {

@@ -76,6 +76,11 @@ PIN_KEY2 = 20
 PIN_KEY3 = 16
 FONT = ImageFont.load_default()
 CPU_SAMPLES = deque(maxlen=2)
+MATRIX_CHARS = "01アイウエオカキクケコサシスセソ"
+MATRIX_FONT_W = 6
+MATRIX_FONT_H = 8
+MATRIX_COLS = 128 // MATRIX_FONT_W
+MATRIX_ROWS = 128 // MATRIX_FONT_H
 BUTTON_PINS = {
     "UP": PIN_UP,
     "DOWN": PIN_DOWN,
@@ -604,21 +609,52 @@ def render_portal_warning(draw, state):
     draw.text((20, 56), "AUTH", font=FONT, fill=(255, 230, 230))
     draw.text((20, 67), "FIRST", font=FONT, fill=(255, 230, 230))
 
+
+def render_matrix(draw, state):
+    matrix = state["matrix"]
+    draw.rectangle((0, 0, 127, 127), fill="BLACK")
+    for col in matrix["columns"]:
+        x = col["x"]
+        head = col["head"]
+        length = col["length"]
+        chars = col["chars"]
+        for offset in range(length):
+            row = head - offset
+            if row < 0 or row >= MATRIX_ROWS:
+                continue
+            y = row * MATRIX_FONT_H
+            char = chars[row % len(chars)]
+            if offset == 0:
+                fill = (210, 255, 210)
+            elif offset < 3:
+                fill = (120, 255, 160)
+            else:
+                fill = (0, max(40, 200 - (offset * 16)), 40)
+            draw.text((x, y), char, font=FONT, fill=fill)
+    draw.rectangle((0, 0, 127, 15), fill=(0, 18, 0))
+    draw.line((0, 16, 127, 16), fill=(0, 64, 0), width=1)
+    draw.text((3, 3), "MATRIX", font=FONT, fill=(120, 255, 160))
+    draw.text((74, 3), "RIGHT=BK", font=FONT, fill=(120, 180, 120))
+
 def render_screen(lcd, state):
     image = Image.new("RGB", (128, 128), "BLACK")
     draw = ImageDraw.Draw(image)
 
-    draw.rectangle((0, 0, 127, 127), fill="BLACK")
-    draw.rectangle((0, 0, 127, 15), fill=(18, 18, 18))
-    draw.line((0, 16, 127, 16), fill=(64, 64, 64), width=1)
-    draw.text((108, 3), f"P{state['page'] + 1}", font=FONT, fill=(180, 180, 180))
+    if state["page"] == 3:
+        render_matrix(draw, state)
+    else:
+        draw.rectangle((0, 0, 127, 127), fill="BLACK")
+        draw.rectangle((0, 0, 127, 15), fill=(18, 18, 18))
+        draw.line((0, 16, 127, 16), fill=(64, 64, 64), width=1)
+        draw.text((108, 3), f"P{state['page'] + 1}", font=FONT, fill=(180, 180, 180))
     if state["page"] == 0:
         render_overview(draw, state)
     elif state["page"] == 1:
         render_probe(draw, state)
-    else:
+    elif state["page"] == 2:
         render_youtube(draw, image, state)
-    render_portal_warning(draw, state)
+    if state["page"] != 3:
+        render_portal_warning(draw, state)
 
     lcd.LCD_ShowImage(image.rotate(90), 0, 0)
 
@@ -688,6 +724,17 @@ def main():
     last_status_write_at = 0.0
     last_display_signature = None
     last_status_signature = None
+    matrix_columns = [
+        {
+            "x": idx * MATRIX_FONT_W,
+            "head": -(idx % MATRIX_ROWS),
+            "length": 4 + ((idx * 3) % 9),
+            "speed": 1 + (idx % 2),
+            "chars": [MATRIX_CHARS[(idx + row * 5) % len(MATRIX_CHARS)] for row in range(MATRIX_ROWS)],
+        }
+        for idx in range(MATRIX_COLS)
+    ]
+    matrix_tick = 0
     request_state_refresh()
     while True:
         now = time.time()
@@ -728,9 +775,11 @@ def main():
                     continue
                 pressed_events.append(name)
                 logging.info("Button pressed: %s", name)
-                if name == "LEFT":
+                if name == "UP" and page == 0:
+                    page = 3
+                elif name == "LEFT":
                     page = 2
-                elif name == "RIGHT" and page == 2:
+                elif name == "RIGHT" and page in (2, 3):
                     page = 0
                 elif name == "PRESS" and page == 2:
                     if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
@@ -749,9 +798,11 @@ def main():
                 if is_pressed and not button_states_prev[name]:
                     pressed_events.append(name)
                     logging.info("Button pressed: %s", name)
-                    if name == "LEFT":
+                    if name == "UP" and page == 0:
+                        page = 3
+                    elif name == "LEFT":
                         page = 2
-                    elif name == "RIGHT" and page == 2:
+                    elif name == "RIGHT" and page in (2, 3):
                         page = 0
                     elif name == "PRESS" and page == 2:
                         if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
@@ -766,6 +817,17 @@ def main():
                     elif name == "PRESS":
                         page = (page + 1) % 2
                 button_states_prev[name] = is_pressed
+
+        matrix_tick += 1
+        for idx, col in enumerate(matrix_columns):
+            if matrix_tick % col["speed"] != 0:
+                continue
+            col["head"] += 1
+            if col["head"] - col["length"] > MATRIX_ROWS:
+                col["head"] = -((idx * 7 + matrix_tick) % MATRIX_ROWS)
+                col["length"] = 4 + ((idx + matrix_tick) % 9)
+                shift = (matrix_tick + idx * 3) % len(MATRIX_CHARS)
+                col["chars"] = [MATRIX_CHARS[(shift + row * 5) % len(MATRIX_CHARS)] for row in range(MATRIX_ROWS)]
 
         if now - probe_cache["last_run"] >= PROBE_INTERVAL_SEC:
             connectivity = read_nm_connectivity()
@@ -818,6 +880,10 @@ def main():
                 "creation": youtube_creation,
                 "status_message": "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
                 "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),
+            },
+            "matrix": {
+                "columns": matrix_columns,
+                "tick": matrix_tick,
             },
             "updated_at": now,
         }
