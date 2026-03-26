@@ -312,6 +312,14 @@
     <p>Missing YouTube OAuth client config. Set <span class="mono">YOUTUBE_CLIENT_CONFIG_PATH</span> or <span class="mono">YOUTUBE_CLIENT_ID</span>.</p>
     {% else %}
     <p><strong>Auth:</strong> <span class="mono">{{ 'ready' if youtube_auth.authorized else 'pending' if youtube_auth.device_pending else 'not authorized' }}</span></p>
+    {% if youtube_auth.authorized %}
+    <p>
+      <strong>Live access:</strong>
+      <span class="{{ 'ok' if youtube_auth.validation.ok else 'err' }}">
+        {{ youtube_auth.validation.message }}
+      </span>
+    </p>
+    {% endif %}
     {% if youtube_creation and youtube_creation.status == 'creating' %}
     <div class="danger-box">
       <strong>STREAM IS CREATING</strong>
@@ -338,7 +346,7 @@
     <form method="post" action="/youtube/create" class="stack-form">
       <label>Stream title</label>
       <input name="title" placeholder="Optional custom title">
-      <button type="submit" {% if not youtube_auth.authorized or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
+      <button type="submit" {% if not youtube_ready or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
     </form>
 
     {% if youtube_stream %}

@@ -7,12 +7,15 @@ YOUTUBE_CLIENT_CONFIG_PATH=${YOUTUBE_CLIENT_CONFIG_PATH:-/etc/rpi_ap_tools_youtu
 YOUTUBE_TOKEN_PATH=${YOUTUBE_TOKEN_PATH:-/var/lib/rpi_ap_tools/youtube_token.json}
 YOUTUBE_STREAM_STATE_PATH=${YOUTUBE_STREAM_STATE_PATH:-/var/lib/rpi_ap_tools/youtube_stream.json}
 APP_STATE_DIR=/var/lib/rpi_ap_tools
+WLAN0_IFACE=${WLAN0_IFACE:-wlan0}
+WLAN1_IFACE=${WLAN1_IFACE:-wlan1}
 
 sudo mkdir -p "$INSTALL_DIR"
-sudo cp -r web_ui.py lcd_status.py youtube_live.py templates systemd "$INSTALL_DIR"/
+sudo cp -r web_ui.py lcd_status.py youtube_live.py configure_shared_egress.sh templates systemd "$INSTALL_DIR"/
 sudo chmod +x "$INSTALL_DIR"/web_ui.py
 sudo chmod +x "$INSTALL_DIR"/lcd_status.py
 sudo chmod +x "$INSTALL_DIR"/youtube_live.py
+sudo chmod +x "$INSTALL_DIR"/configure_shared_egress.sh
 sudo apt-get update
 sudo apt-get install -y python3-qrcode python3-pil
 
@@ -83,9 +86,18 @@ done
 
 sudo cp "$INSTALL_DIR"/systemd/rpi-wlan1-ui.service /etc/systemd/system/
 sudo cp "$INSTALL_DIR"/systemd/rpi-lcd-status.service /etc/systemd/system/
+sudo cp "$INSTALL_DIR"/systemd/rpi-shared-egress.service /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo systemctl enable rpi-shared-egress.service
 sudo systemctl enable rpi-wlan1-ui.service
 sudo systemctl enable rpi-lcd-status.service
+
+echo "Applying shared egress configuration for $WLAN0_IFACE -> $WLAN1_IFACE"
+if ! sudo env WLAN0_IFACE="$WLAN0_IFACE" WLAN1_IFACE="$WLAN1_IFACE" "$INSTALL_DIR"/configure_shared_egress.sh; then
+  echo "WARNING: shared egress configuration did not complete automatically."
+  echo "Run manually after NetworkManager profiles are ready:"
+  echo "  sudo env WLAN0_IFACE=$WLAN0_IFACE WLAN1_IFACE=$WLAN1_IFACE $INSTALL_DIR/configure_shared_egress.sh"
+fi
 
 echo "Installed."
 echo "Prepared files:"
@@ -108,8 +120,12 @@ case "$YOUTUBE_CLIENT_ID_CHECK" in
 esac
 echo "Next steps:"
 echo "  1. Verify or edit $YOUTUBE_CLIENT_CONFIG_PATH"
-echo "  2. Restart services"
-echo "  3. Open the web UI and use Start YouTube auth"
+echo "  2. Confirm shared egress config if your hotspot uses a captive portal"
+echo "  3. Restart services"
+echo "  4. Open the web UI and use Start YouTube auth"
+echo "Shared egress reconfigure:"
+echo "  sudo env WLAN0_IFACE=$WLAN0_IFACE WLAN1_IFACE=$WLAN1_IFACE $INSTALL_DIR/configure_shared_egress.sh"
 echo "Restart services:"
+echo "  sudo systemctl restart rpi-shared-egress.service"
 echo "  sudo systemctl restart rpi-wlan1-ui.service"
 echo "  sudo systemctl restart rpi-lcd-status.service"

@@ -247,6 +247,11 @@ def index():
     youtube_auth = get_auth_status()
     youtube_creation = load_creation_state()
     youtube_stream = load_stream_state()
+    youtube_ready = bool(
+        youtube_auth.get("client_configured")
+        and youtube_auth.get("authorized")
+        and (youtube_auth.get("validation") or {}).get("ok")
+    )
     return render_template(
         "index.html",
         ap_name=get_ap_name(),
@@ -258,6 +263,7 @@ def index():
         runtime=runtime,
         portal_ack_available=bool(CAPTIVE_PORTAL_ACK_CMD),
         youtube_auth=youtube_auth,
+        youtube_ready=youtube_ready,
         youtube_creation=youtube_creation,
         youtube_stream=youtube_stream,
         youtube_qr=qr_data_uri((youtube_stream or {}).get("qr_payload", "")),

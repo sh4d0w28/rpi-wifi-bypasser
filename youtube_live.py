@@ -230,9 +230,64 @@ def authorization_ready():
     return bool(token.get("refresh_token") or token.get("access_token"))
 
 
+def validate_live_access():
+    if not authorization_ready():
+        return {
+            "ok": False,
+            "code": "not_authorized",
+            "message": "YouTube is not authorized yet",
+        }
+
+    try:
+        payload = _api_request(
+            "GET",
+            "liveBroadcasts",
+            params={
+                "part": "id,status",
+                "broadcastStatus": "all",
+                "broadcastType": "all",
+                "mine": "true",
+                "maxResults": 1,
+            },
+        )
+        items = payload.get("items", [])
+        return {
+            "ok": True,
+            "code": "ok",
+            "message": "YouTube Live access verified",
+            "checked_at": time.time(),
+            "broadcast_count_hint": len(items),
+        }
+    except YouTubeLiveError as exc:
+        message = str(exc).strip() or "YouTube Live validation failed"
+        lowered = message.lower()
+        code = "api_error"
+        if "not authorized" in lowered or "unauthorized" in lowered:
+            code = "not_authorized"
+        elif "refresh token" in lowered or "invalid_grant" in lowered:
+            code = "token_expired"
+        elif "insufficient" in lowered or "scope" in lowered:
+            code = "scope_error"
+        elif "live streaming" in lowered or "live broadcast" in lowered:
+            code = "live_not_enabled"
+        return {
+            "ok": False,
+            "code": code,
+            "message": message,
+            "checked_at": time.time(),
+        }
+
+
 def get_auth_status():
     token = load_token()
     device = load_device_state()
+    validation = {
+        "ok": False,
+        "code": "not_checked",
+        "message": "Authorization has not been verified yet",
+    }
+    if authorization_ready():
+        validation = validate_live_access()
     return {
         "client_configured": client_ready(),
         "authorized": authorization_ready(),
@@ -242,6 +297,7 @@ def get_auth_status():
             "has_refresh_token": bool(token.get("refresh_token")),
             "expires_at": token.get("expires_at"),
         },
+        "validation": validation,
         "creation": load_creation_state(),
     }
 
@@ -503,6 +559,11 @@ def start_stream_creation(*, ap_ip="-", title=None):
     if creation_in_progress():
         LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
         raise YouTubeLiveError("Stream creation already in progress")
+    validation = validate_live_access()
+    if not validation.get("ok"):
+        message = validation.get("message") or "YouTube Live validation failed"
+        LOGGER.warning("Rejected YouTube stream creation request because validation failed: %s", message)
+        raise YouTubeLiveError(message)
     fd = _lock_creation()
     try:
         if creation_in_progress():
