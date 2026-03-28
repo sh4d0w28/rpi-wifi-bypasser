@@ -20,6 +20,7 @@ from youtube_live import (
     load_creation_state,
     load_stream_state,
     qrcode as youtube_qrcode,
+    set_proxy_audio_mode,
     start_stream_creation,
 )
 
@@ -581,8 +582,12 @@ def render_youtube(draw, image, state):
         if qr_image is not None:
             image.paste(qr_image, (6, 6))
             draw.rectangle((0, 118, 127, 127), fill="BLACK")
-            draw.text((4, 119), fit_text(youtube.get("mode", "direct").upper(), 7), font=FONT, fill=(140, 170, 210))
-            draw.text((46, 119), "PRESS=NEW", font=FONT, fill=(180, 180, 180))
+            if youtube.get("mode") == "proxy":
+                draw.text((4, 119), fit_text(youtube.get("audio_mode_short", "NORM"), 5), font=FONT, fill=(140, 170, 210))
+                draw.text((40, 119), "P=NEW 1N2V3M", font=FONT, fill=(180, 180, 180))
+            else:
+                draw.text((4, 119), fit_text(youtube.get("mode", "direct").upper(), 7), font=FONT, fill=(140, 170, 210))
+                draw.text((46, 119), "PRESS=NEW", font=FONT, fill=(180, 180, 180))
             return
 
     draw.text((3, 3), "YOUTUBE", font=FONT, fill=(140, 170, 210))
@@ -596,8 +601,14 @@ def render_youtube(draw, image, state):
     if youtube["auth"].get("device_pending"):
         code = (youtube["auth"].get("device") or {}).get("user_code", "")
         draw.text((3, 72), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
-    draw.text((3, 88), "PRESS=create", font=FONT, fill=(180, 180, 180))
-    draw.text((3, 101), "RIGHT=back", font=FONT, fill=(180, 180, 180))
+    elif youtube.get("mode") == "proxy":
+        draw.text((3, 72), fit_text(f"AUD {youtube.get('audio_mode_label', 'Normal')}", 20), font=FONT, fill=(120, 220, 255))
+    if youtube.get("mode") == "proxy":
+        draw.text((3, 88), "1=norm 2=vox 3=mute", font=FONT, fill=(180, 180, 180))
+        draw.text((3, 101), "P=create R=back", font=FONT, fill=(180, 180, 180))
+    else:
+        draw.text((3, 88), "PRESS=create", font=FONT, fill=(180, 180, 180))
+        draw.text((3, 101), "RIGHT=back", font=FONT, fill=(180, 180, 180))
 
 def render_portal_warning(draw, state):
     if not state["probe"].get("auth_required"):
@@ -736,6 +747,47 @@ def main():
     ]
     matrix_tick = 0
     request_state_refresh()
+
+    def handle_pressed_button(name):
+        nonlocal page, youtube_status_message, youtube_creation, youtube_stream
+        logging.info("Button pressed: %s", name)
+        if name == "UP" and page == 0:
+            page = 3
+        elif name == "LEFT":
+            page = 2
+        elif name == "RIGHT" and page in (2, 3):
+            page = 0
+        elif name == "PRESS" and page == 2:
+            if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
+                youtube_status_message = "AUTH FIRST"
+            else:
+                try:
+                    start_stream_creation(ap_ip=w0)
+                    youtube_creation = load_creation_state()
+                    youtube_status_message = "Stream is creating"
+                except YouTubeLiveError as exc:
+                    youtube_status_message = fit_text(str(exc), 20)
+        elif name == "KEY1" and page == 2 and youtube_stream.get("mode") == "proxy":
+            try:
+                youtube_stream = set_proxy_audio_mode("normal")
+                youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', 'NORM')}"
+            except YouTubeLiveError as exc:
+                youtube_status_message = fit_text(str(exc), 20)
+        elif name == "KEY2" and page == 2 and youtube_stream.get("mode") == "proxy":
+            try:
+                youtube_stream = set_proxy_audio_mode("voice")
+                youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', 'VOICE')}"
+            except YouTubeLiveError as exc:
+                youtube_status_message = fit_text(str(exc), 20)
+        elif name == "KEY3" and page == 2 and youtube_stream.get("mode") == "proxy":
+            try:
+                youtube_stream = set_proxy_audio_mode("mute")
+                youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', 'MUTE')}"
+            except YouTubeLiveError as exc:
+                youtube_status_message = fit_text(str(exc), 20)
+        elif name == "PRESS":
+            page = (page + 1) % 2
+
     while True:
         now = time.time()
         if now - prev_t >= REFRESH_SEC:
@@ -774,48 +826,12 @@ def main():
                 if not is_pressed:
                     continue
                 pressed_events.append(name)
-                logging.info("Button pressed: %s", name)
-                if name == "UP" and page == 0:
-                    page = 3
-                elif name == "LEFT":
-                    page = 2
-                elif name == "RIGHT" and page in (2, 3):
-                    page = 0
-                elif name == "PRESS" and page == 2:
-                    if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
-                        youtube_status_message = "AUTH FIRST"
-                    else:
-                        try:
-                            start_stream_creation(ap_ip=w0)
-                            youtube_creation = load_creation_state()
-                            youtube_status_message = "Stream is creating"
-                        except YouTubeLiveError as exc:
-                            youtube_status_message = fit_text(str(exc), 20)
-                elif name == "PRESS":
-                    page = (page + 1) % 2
+                handle_pressed_button(name)
         else:
             for name, is_pressed in button_states.items():
                 if is_pressed and not button_states_prev[name]:
                     pressed_events.append(name)
-                    logging.info("Button pressed: %s", name)
-                    if name == "UP" and page == 0:
-                        page = 3
-                    elif name == "LEFT":
-                        page = 2
-                    elif name == "RIGHT" and page in (2, 3):
-                        page = 0
-                    elif name == "PRESS" and page == 2:
-                        if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
-                            youtube_status_message = "AUTH FIRST"
-                        else:
-                            try:
-                                start_stream_creation(ap_ip=w0)
-                                youtube_creation = load_creation_state()
-                                youtube_status_message = "Stream is creating"
-                            except YouTubeLiveError as exc:
-                                youtube_status_message = fit_text(str(exc), 20)
-                    elif name == "PRESS":
-                        page = (page + 1) % 2
+                    handle_pressed_button(name)
                 button_states_prev[name] = is_pressed
 
         matrix_tick += 1
@@ -846,7 +862,7 @@ def main():
                 "portal_capture": portal_capture,
             }
 
-        if "KEY3" in pressed_events and probe_cache["portal_suspected"]:
+        if "KEY3" in pressed_events and probe_cache["portal_suspected"] and not (page == 2 and youtube_stream.get("mode") == "proxy"):
             portal_ack_last = perform_portal_ack()
             logging.info(
                 "Portal action via KEY3: ok=%s message=%s",
@@ -877,6 +893,9 @@ def main():
                 "watch_url": youtube_stream.get("watch_url", ""),
                 "qr_payload": youtube_stream.get("qr_payload", ""),
                 "mode": youtube_stream.get("mode", "direct"),
+                "audio_mode": youtube_stream.get("audio_mode", "normal"),
+                "audio_mode_label": youtube_stream.get("audio_mode_label", "Normal"),
+                "audio_mode_short": youtube_stream.get("audio_mode_short", "NORM"),
                 "creation": youtube_creation,
                 "status_message": "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
                 "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),

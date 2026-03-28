@@ -9,9 +9,11 @@ from flask import Flask, render_template, request, redirect, url_for, flash
 from youtube_live import (
     YouTubeLiveError,
     get_auth_status,
+    list_audio_modes,
     load_creation_state,
     load_stream_state,
     qr_data_uri,
+    set_proxy_audio_mode,
     start_device_authorization,
     poll_device_authorization,
     start_stream_creation,
@@ -266,6 +268,7 @@ def index():
         youtube_ready=youtube_ready,
         youtube_creation=youtube_creation,
         youtube_stream=youtube_stream,
+        youtube_audio_modes=list_audio_modes(),
         youtube_qr=qr_data_uri((youtube_stream or {}).get("qr_payload", "")),
     )
 
@@ -349,6 +352,17 @@ def youtube_create():
     try:
         start_stream_creation(ap_ip=ap_ip, title=title)
         flash("YouTube stream creation started.", "success")
+    except YouTubeLiveError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("index"))
+
+
+@APP.route("/youtube/audio-mode", methods=["POST"])
+def youtube_audio_mode():
+    mode = request.form.get("mode", "").strip()
+    try:
+        state = set_proxy_audio_mode(mode)
+        flash(f"YouTube relay audio mode: {state.get('audio_mode_label', 'Normal')}", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
     return redirect(url_for("index"))

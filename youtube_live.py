@@ -35,14 +35,63 @@ PROXY_PUBLISH_URL_TEMPLATE = os.environ.get("YOUTUBE_PROXY_PUBLISH_URL", "").str
 PROXY_RTMP_PORT = int(os.environ.get("YOUTUBE_PROXY_RTMP_PORT", "7777") or "7777")
 PROXY_RTMP_APP = os.environ.get("YOUTUBE_PROXY_RTMP_APP", "live").strip().strip("/")
 FFMPEG_BIN = os.environ.get("YOUTUBE_PROXY_FFMPEG_BIN", "ffmpeg").strip() or "ffmpeg"
+DEFAULT_PROXY_AUDIO_MODE = os.environ.get("YOUTUBE_PROXY_AUDIO_MODE", "normal").strip().lower() or "normal"
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 LOGGER = logging.getLogger(__name__)
+AUDIO_MODE_SPECS = {
+    "normal": {
+        "label": "Normal",
+        "short_label": "NORM",
+        "description": "Pass audio through unchanged.",
+    },
+    "voice": {
+        "label": "Voice Focus",
+        "short_label": "VOICE",
+        "description": "Speech-focused band-pass and compression. This is not true vocal isolation.",
+    },
+    "mute": {
+        "label": "Mute",
+        "short_label": "MUTE",
+        "description": "Drop audio from the outgoing relay.",
+    },
+}
+if DEFAULT_PROXY_AUDIO_MODE not in AUDIO_MODE_SPECS:
+    DEFAULT_PROXY_AUDIO_MODE = "normal"
 
 
 class YouTubeLiveError(RuntimeError):
     pass
+
+
+def normalize_audio_mode(mode):
+    value = (mode or "").strip().lower()
+    return value if value in AUDIO_MODE_SPECS else DEFAULT_PROXY_AUDIO_MODE
+
+
+def audio_mode_spec(mode):
+    return AUDIO_MODE_SPECS[normalize_audio_mode(mode)]
+
+
+def list_audio_modes():
+    return [
+        {"value": value, **spec}
+        for value, spec in AUDIO_MODE_SPECS.items()
+    ]
+
+
+def _decorate_audio_mode_fields(state, *, default_mode=None):
+    if not isinstance(state, dict) or not state:
+        return {}
+    payload = dict(state)
+    mode = normalize_audio_mode(payload.get("audio_mode") or default_mode or DEFAULT_PROXY_AUDIO_MODE)
+    spec = audio_mode_spec(mode)
+    payload["audio_mode"] = mode
+    payload["audio_mode_label"] = spec["label"]
+    payload["audio_mode_short"] = spec["short_label"]
+    payload["audio_mode_description"] = spec["description"]
+    return payload
 
 
 def _load_json(path, default):
@@ -162,17 +211,18 @@ def clear_device_state():
 
 
 def load_stream_state():
-    state = _load_json(STREAM_STATE_PATH, {})
-    if isinstance(state, dict) and state.get("mode") == "proxy":
+    state = _decorate_audio_mode_fields(_load_json(STREAM_STATE_PATH, {}), default_mode="normal")
+    if state.get("mode") == "proxy":
+        state["audio_mode"] = normalize_audio_mode(state.get("audio_mode") or DEFAULT_PROXY_AUDIO_MODE)
         relay = load_relay_state()
         if relay:
-            state = dict(state)
             state["relay"] = relay
+            state = _decorate_audio_mode_fields(state, default_mode=relay.get("audio_mode"))
     return state
 
 
 def save_stream_state(state):
-    _save_json(STREAM_STATE_PATH, state)
+    _save_json(STREAM_STATE_PATH, _decorate_audio_mode_fields(state, default_mode="normal"))
 
 
 def load_relay_state():
@@ -180,7 +230,7 @@ def load_relay_state():
 
 
 def save_relay_state(state):
-    _save_json(RELAY_STATE_PATH, state)
+    _save_json(RELAY_STATE_PATH, _decorate_audio_mode_fields(state, default_mode=DEFAULT_PROXY_AUDIO_MODE))
 
 
 def clear_relay_state():
@@ -233,10 +283,10 @@ def normalize_creation_state(state):
 def normalize_relay_state(state):
     if not isinstance(state, dict):
         return {}
+    state = _decorate_audio_mode_fields(state, default_mode=DEFAULT_PROXY_AUDIO_MODE)
     pid = state.get("pid")
     if not pid:
         return state
-    state = dict(state)
     state["running"] = _pid_alive(pid)
     if not state["running"] and state.get("status") == "running":
         state["status"] = "stopped"
@@ -469,6 +519,51 @@ def _proxy_listen_url():
     return f"rtmp://0.0.0.0:{PROXY_RTMP_PORT}"
 
 
+def _proxy_relay_argv(*, listen_url, target_url, audio_mode):
+    mode = normalize_audio_mode(audio_mode)
+    argv = [
+        FFMPEG_BIN,
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-listen",
+        "1",
+        "-i",
+        listen_url,
+    ]
+    if mode == "normal":
+        argv.extend(["-c", "copy"])
+    elif mode == "mute":
+        argv.extend([
+            "-map",
+            "0:v?",
+            "-c:v",
+            "copy",
+            "-an",
+        ])
+    else:
+        argv.extend([
+            "-map",
+            "0:v?",
+            "-c:v",
+            "copy",
+            "-map",
+            "0:a?",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            "-af",
+            "highpass=f=160,lowpass=f=3800,acompressor=threshold=0.08:ratio=3:attack=5:release=60:makeup=2,volume=2",
+        ])
+    argv.extend(["-f", "flv", target_url])
+    return argv
+
+
 def _build_publish_info(stream_name, ingestion_info, ap_ip):
     rtmp_base = ingestion_info.get("ingestionAddress") or ""
     rtmps_base = ingestion_info.get("rtmpsIngestionAddress") or rtmp_base
@@ -511,27 +606,14 @@ def _stop_proxy_relay():
     )
 
 
-def _start_proxy_relay(*, listen_url, target_url, stream_title):
+def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None):
     if not target_url:
         raise YouTubeLiveError("Missing YouTube RTMP target for proxy relay")
     _stop_proxy_relay()
     RELAY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log_handle = RELAY_LOG_PATH.open("ab")
-    argv = [
-        FFMPEG_BIN,
-        "-hide_banner",
-        "-loglevel",
-        "warning",
-        "-listen",
-        "1",
-        "-i",
-        listen_url,
-        "-c",
-        "copy",
-        "-f",
-        "flv",
-        target_url,
-    ]
+    audio_mode = normalize_audio_mode(audio_mode)
+    argv = _proxy_relay_argv(listen_url=listen_url, target_url=target_url, audio_mode=audio_mode)
     try:
         proc = subprocess.Popen(
             argv,
@@ -547,20 +629,52 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title):
     except Exception:
         log_handle.close()
         raise
-    relay = {
-        "status": "running",
-        "running": True,
-        "pid": proc.pid,
-        "listen_url": listen_url,
-        "target_url": target_url,
-        "log_path": str(RELAY_LOG_PATH),
-        "stream_title": stream_title,
-        "started_at": time.time(),
-        "ffmpeg_bin": FFMPEG_BIN,
-        "mode": "copy",
-    }
+    relay = _decorate_audio_mode_fields(
+        {
+            "status": "running",
+            "running": True,
+            "pid": proc.pid,
+            "listen_url": listen_url,
+            "target_url": target_url,
+            "log_path": str(RELAY_LOG_PATH),
+            "stream_title": stream_title,
+            "started_at": time.time(),
+            "ffmpeg_bin": FFMPEG_BIN,
+            "mode": "copy" if audio_mode == "normal" else "transcode-audio" if audio_mode == "voice" else "video-only",
+            "audio_mode": audio_mode,
+        },
+        default_mode=audio_mode,
+    )
     save_relay_state(relay)
     return relay
+
+
+def set_proxy_audio_mode(mode):
+    desired_mode = normalize_audio_mode(mode)
+    state = load_stream_state()
+    if not state:
+        raise YouTubeLiveError("No YouTube stream has been created yet")
+    if state.get("mode") != "proxy":
+        raise YouTubeLiveError("Audio mode switching is only available when proxy relay mode is enabled")
+    listen_url = state.get("proxy_listen_url", "")
+    target_url = state.get("target_url", "")
+    if not listen_url or not target_url:
+        raise YouTubeLiveError("Proxy relay settings are incomplete")
+
+    current_mode = normalize_audio_mode((state.get("relay") or {}).get("audio_mode") or state.get("audio_mode"))
+    relay = state.get("relay") or {}
+    if current_mode == desired_mode and relay.get("running"):
+        return load_stream_state()
+
+    state["audio_mode"] = desired_mode
+    state["relay"] = _start_proxy_relay(
+        listen_url=listen_url,
+        target_url=target_url,
+        stream_title=state.get("title", ""),
+        audio_mode=desired_mode,
+    )
+    save_stream_state(state)
+    return load_stream_state()
 
 
 def create_stream_bundle(*, ap_ip="-", title=None):
@@ -637,6 +751,7 @@ def create_stream_bundle(*, ap_ip="-", title=None):
         "rtmps_ingestion_address": ingestion_info.get("rtmpsIngestionAddress", ""),
         "privacy_status": STREAM_PRIVACY_STATUS,
         "ap_ip": ap_ip,
+        "audio_mode": DEFAULT_PROXY_AUDIO_MODE if PROXY_ENABLED else "normal",
         **publish,
     }
     _stop_proxy_relay()
@@ -645,6 +760,7 @@ def create_stream_bundle(*, ap_ip="-", title=None):
             listen_url=state.get("proxy_listen_url", ""),
             target_url=state.get("target_url", ""),
             stream_title=title,
+            audio_mode=state.get("audio_mode"),
         )
     save_stream_state(state)
     LOGGER.info(

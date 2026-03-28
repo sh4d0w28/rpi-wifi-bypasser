@@ -37,12 +37,17 @@ Current web UI behavior:
   - poll for completed authorization
   - create a YouTube Live stream/broadcast pair
   - start a local RTMP passthrough relay on the Pi and show a QR for the current publish target
+  - switch proxy relay audio between `Normal`, `Voice Focus`, and `Mute`
 - Captive-portal status in the UI is only the Pi uplink's status, not a per-client browser/session test for each device behind `wlan0`
 
 LCD YouTube controls:
 - Press `LEFT` to open the YouTube page
 - Press `PRESS` on the YouTube page to create a stream
 - If a stream exists, the YouTube page shows its QR
+- On the YouTube page in proxy mode:
+  - `KEY1` = `Normal`
+  - `KEY2` = `Voice Focus`
+  - `KEY3` = `Mute`
 
 YouTube config:
 - `YOUTUBE_CLIENT_CONFIG_PATH` default: `/etc/rpi_ap_tools_youtube_client.json`
@@ -52,12 +57,15 @@ YouTube config:
 - `YOUTUBE_STREAM_TITLE_PREFIX` default: `RPi Live`
 - `YOUTUBE_STREAM_PRIVACY_STATUS` default: `unlisted`
 - `YOUTUBE_PROXY_ENABLED` default: `1`
+- `YOUTUBE_PROXY_AUDIO_MODE` default: `normal`
 - Local proxy relay defaults:
   - publish URL: `rtmp://{ap_ip}:7777/live`
   - listen URL: `rtmp://0.0.0.0:7777/live`
   - upstream target: YouTube `ingestionAddress` plus the generated stream key
-  - relay process: `ffmpeg -listen 1 -c copy`
-  - no decode or re-encode is performed, which is the only viable mode for a Pi Zero
+  - relay process in `normal` mode: `ffmpeg -listen 1 -c copy`
+  - `voice` mode keeps video copy but re-encodes audio with a speech-focused filter
+  - `mute` mode drops outgoing audio entirely
+  - changing relay audio mode restarts the listener, so the upstream RTMP sender may need to reconnect
 - Optional relay env vars:
   - `YOUTUBE_PROXY_PUBLISH_URL`
   - `YOUTUBE_PROXY_RTMP_PORT`
