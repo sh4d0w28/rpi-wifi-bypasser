@@ -61,6 +61,8 @@ PROBE_INTERVAL_SEC = float(os.environ.get("PROBE_INTERVAL_SEC", "60.0"))
 NETWORK_FALLBACK_REFRESH_SEC = float(os.environ.get("NETWORK_FALLBACK_REFRESH_SEC", "30.0"))
 STATUS_WRITE_SEC = float(os.environ.get("STATUS_WRITE_SEC", "5.0"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
+UPDATE_SCRIPT_PATH = Path(os.environ.get("UPDATE_SCRIPT_PATH", "/home/pi/update.sh"))
+UPDATE_LOG_PATH = Path(os.environ.get("UPDATE_LOG_PATH", "/run/rpi_ap_tools_update.log"))
 CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
 PORTAL_CAPTURE_URL = os.environ.get("PORTAL_CAPTURE_URL", "http://connectivitycheck.gstatic.com/generate_204").strip()
 PORTAL_CAPTURE_HTML_PATH = Path(os.environ.get("PORTAL_CAPTURE_HTML_PATH", "/run/rpi_ap_tools_captive_portal.html"))
@@ -895,6 +897,7 @@ def main():
             {"label": "Matrix", "kind": "screen", "target": "matrix"},
             {"label": "Games", "kind": "menu", "target": "games"},
             {"label": "FFmpeg", "kind": "menu", "target": "ffmpeg"},
+            {"label": "Update", "kind": "action", "action": "update_run"},
             {"label": "Settings", "kind": "menu", "target": "settings"},
         ]
 
@@ -1105,6 +1108,29 @@ def main():
         current_screen = "probe"
         ui_mode = "screen"
 
+    def trigger_update_run():
+        nonlocal current_screen, ui_mode
+        if not UPDATE_SCRIPT_PATH.exists():
+            set_ui_message("update.sh missing")
+            return
+        try:
+            UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            log_handle = UPDATE_LOG_PATH.open("ab")
+            subprocess.Popen(
+                ["/bin/bash", str(UPDATE_SCRIPT_PATH)],
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                cwd=str(UPDATE_SCRIPT_PATH.parent),
+                start_new_session=True,
+            )
+            set_ui_message("Update started")
+            current_screen = None
+            ui_mode = "menu"
+        except Exception as exc:
+            logging.exception("Failed to start update script")
+            set_ui_message(fit_text(str(exc), 20))
+
     def open_selected_item():
         nonlocal current_screen, ui_mode, pong_game, catch_game
         if ui_mode != "menu":
@@ -1133,6 +1159,8 @@ def main():
                 trigger_youtube_create()
             elif action == "youtube_audio":
                 trigger_youtube_audio(item.get("arg", "normal"))
+            elif action == "update_run":
+                trigger_update_run()
             elif action == "portal_ack":
                 trigger_portal_ack()
         elif item.get("disabled"):

@@ -66,6 +66,7 @@ LCD controls:
   - `Matrix`
   - `Games`
   - `FFmpeg`
+  - `Update`
   - `Settings`
 - The `Games` submenu contains:
   - `Pong`
@@ -82,6 +83,8 @@ LCD controls:
   - the device code and verification URL are shown on the LCD
   - `PRESS` checks auth completion while a device code is pending
 - Matrix, games, probe checks, and YouTube state refresh only run while their related screen or menu is active
+- `Update` runs `/home/pi/update.sh` in the background from the LCD UI
+- LCD-triggered update output is written to `/run/rpi_ap_tools_update.log`
 - If `CAPTIVE_PORTAL_ACK_CMD` is configured, the `Settings` submenu also shows `Portal Ack`
 
 YouTube config:
