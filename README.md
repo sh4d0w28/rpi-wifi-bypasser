@@ -49,16 +49,23 @@ Current web UI behavior:
   - keep working even though the update restarts the web UI service, because the job runs in its own oneshot systemd service
 
 LCD controls:
-- The LCD now uses a menu stack like an old phone UI
+- The LCD now starts on a main home screen like an old phone
+- `PRESS`, `RIGHT`, or `KEY1` from home opens the main menu
 - `UP` / `DOWN` scroll the current menu
 - `PRESS`, `RIGHT`, or `KEY1` open the selected item
 - `LEFT` or `KEY2` go back one level
-- `KEY3` jumps back to the home menu
+- `KEY3` jumps back to the home screen
+- The main menu contains:
+  - `YouTube`
+  - `Matrix`
+  - `FFmpeg`
+  - `Settings`
 - The `YouTube` submenu contains:
   - dashboard / QR view
   - create stream
+- The `FFmpeg` submenu contains:
   - proxy audio mode switches when proxy mode is active
-- If `CAPTIVE_PORTAL_ACK_CMD` is configured, the root menu also shows `Portal Ack`
+- If `CAPTIVE_PORTAL_ACK_CMD` is configured, the `Settings` submenu also shows `Portal Ack`
 
 YouTube config:
 - `YOUTUBE_CLIENT_CONFIG_PATH` default: `/etc/rpi_ap_tools_youtube_client.json`

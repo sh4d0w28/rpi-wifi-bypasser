@@ -644,6 +644,36 @@ def render_matrix(draw, state):
     draw.text((74, 3), "2/L BK", font=FONT, fill=(120, 180, 120))
 
 
+def render_home(draw, state):
+    ap_name = fit_text(state.get("ap_name", "-"), 16)
+    wifi_name = fit_text((state.get("active_wifi") or {}).get("name", "-"), 16)
+    signal = state.get("signal", "-")
+    cpu_pct = state.get("cpu_pct")
+    cpu_text = "--" if cpu_pct is None else f"{cpu_pct:.0f}%"
+    temp = state.get("cpu_temp")
+    temp_text = "--" if temp is None else f"{temp:.0f}C"
+    mode_text = "DIRECT"
+    if state.get("youtube", {}).get("mode") == "proxy":
+        mode_text = state["youtube"].get("audio_mode_short", "NORM")
+
+    draw.rectangle((0, 0, 127, 127), fill="BLACK")
+    draw.rectangle((0, 0, 127, 18), fill=(18, 46, 18))
+    draw.line((0, 19, 127, 19), fill=(90, 180, 90), width=1)
+    draw.text((4, 5), "HOME", font=FONT, fill=(200, 255, 200))
+    draw.text((92, 5), "MENU", font=FONT, fill=(120, 200, 120))
+
+    draw.rectangle((6, 28, 121, 88), outline=(40, 120, 40), width=1)
+    draw.rectangle((10, 32, 117, 84), outline=(24, 72, 24), width=1)
+    draw.text((16, 37), fit_text(ap_name.upper(), 14), font=FONT, fill=(240, 255, 240))
+    draw.text((16, 51), fit_text(wifi_name, 16), font=FONT, fill=(120, 220, 255))
+    draw.text((16, 65), fit_text(f"SIG {signal}%", 14) if signal != "-" else "SIG --", font=FONT, fill=signal_color(signal))
+
+    draw.text((8, 96), fit_text(f"YT {mode_text}", 10), font=FONT, fill=(255, 210, 90))
+    draw.text((66, 96), fit_text(f"CPU {cpu_text}", 10), font=FONT, fill=metric_color(cpu_pct, 60, 85))
+    draw.text((8, 108), fit_text(f"TEMP {temp_text}", 12), font=FONT, fill=metric_color(temp, 60, 75))
+    draw.text((8, 120), "PRESS CENTER", font=FONT, fill=(180, 220, 180))
+
+
 def render_menu(draw, state):
     title = fit_text(state.get("menu_title", "Menu").upper(), 12)
     items = state.get("menu_items") or []
@@ -691,7 +721,9 @@ def render_screen(lcd, state):
     image = Image.new("RGB", (128, 128), "BLACK")
     draw = ImageDraw.Draw(image)
 
-    if state.get("ui_mode") == "menu":
+    if state.get("ui_mode") == "home":
+        render_home(draw, state)
+    elif state.get("ui_mode") == "menu":
         render_menu(draw, state)
     elif state["screen_id"] == "matrix":
         render_matrix(draw, state)
@@ -772,6 +804,7 @@ def main():
     youtube_status_message = "Use YT menu"
     menu_stack = [{"id": "root", "selected": 0}]
     current_screen = None
+    ui_mode = "home"
     ui_message = ""
     last_display_at = 0.0
     last_network_refresh_at = 0.0
@@ -796,15 +829,12 @@ def main():
         ui_message = fit_text(message or "", 20)
 
     def build_root_menu():
-        items = [
-            {"label": "Overview", "kind": "screen", "target": "overview"},
-            {"label": "Probe", "kind": "screen", "target": "probe"},
+        return [
             {"label": "YouTube", "kind": "menu", "target": "youtube"},
             {"label": "Matrix", "kind": "screen", "target": "matrix"},
+            {"label": "FFmpeg", "kind": "menu", "target": "ffmpeg"},
+            {"label": "Settings", "kind": "menu", "target": "settings"},
         ]
-        if CAPTIVE_PORTAL_ACK_CMD:
-            items.append({"label": "Portal Ack", "kind": "action", "action": "portal_ack"})
-        return items
 
     def build_youtube_menu():
         items = [
@@ -814,6 +844,12 @@ def main():
             items.append({"label": "Create Stream", "kind": "noop", "disabled": True})
         else:
             items.append({"label": "Create Stream", "kind": "action", "action": "youtube_create"})
+        return items
+
+    def build_ffmpeg_menu():
+        items = [
+            {"label": "Mode", "kind": "noop", "disabled": True},
+        ]
         if youtube_stream.get("mode") == "proxy":
             for mode, label in (
                 ("normal", "Audio Normal"),
@@ -829,11 +865,26 @@ def main():
                         "checked": youtube_stream.get("audio_mode") == mode,
                     }
                 )
+        else:
+            items.append({"label": "Needs proxy mode", "kind": "noop", "disabled": True})
+        return items
+
+    def build_settings_menu():
+        items = [
+            {"label": "Overview", "kind": "screen", "target": "overview"},
+            {"label": "Probe", "kind": "screen", "target": "probe"},
+        ]
+        if CAPTIVE_PORTAL_ACK_CMD:
+            items.append({"label": "Portal Ack", "kind": "action", "action": "portal_ack"})
         return items
 
     def get_menu_definition(menu_id):
         if menu_id == "youtube":
             return "YouTube", build_youtube_menu()
+        if menu_id == "ffmpeg":
+            return "FFmpeg", build_ffmpeg_menu()
+        if menu_id == "settings":
+            return "Settings", build_settings_menu()
         return "Main", build_root_menu()
 
     def current_menu_entry():
@@ -847,29 +898,39 @@ def main():
         return title, items
 
     def move_menu(delta):
-        if current_screen is not None:
+        if ui_mode != "menu":
             return
         _, items = current_menu_definition()
         current_menu_entry()["selected"] = (current_menu_entry()["selected"] + delta) % len(items)
 
     def go_back():
-        nonlocal current_screen
-        if current_screen is not None:
+        nonlocal current_screen, ui_mode
+        if ui_mode == "screen":
             current_screen = None
+            ui_mode = "menu"
         elif len(menu_stack) > 1:
             menu_stack.pop()
+        else:
+            ui_mode = "home"
 
     def go_home():
-        nonlocal current_screen
+        nonlocal current_screen, ui_mode
         current_screen = None
         del menu_stack[1:]
+        ui_mode = "home"
+
+    def open_menu():
+        nonlocal current_screen, ui_mode
+        current_screen = None
+        ui_mode = "menu"
 
     def trigger_youtube_create():
-        nonlocal youtube_creation, youtube_status_message, current_screen
+        nonlocal youtube_creation, youtube_status_message, current_screen, ui_mode
         if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
             youtube_status_message = "AUTH FIRST"
             set_ui_message("AUTH FIRST")
             current_screen = "youtube"
+            ui_mode = "screen"
             return
         try:
             start_stream_creation(ap_ip=w0)
@@ -877,39 +938,48 @@ def main():
             youtube_status_message = "Stream is creating"
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
+            ui_mode = "screen"
         except YouTubeLiveError as exc:
             youtube_status_message = fit_text(str(exc), 20)
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
+            ui_mode = "screen"
 
     def trigger_youtube_audio(mode):
-        nonlocal youtube_stream, youtube_status_message, current_screen
+        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode
         try:
             youtube_stream = set_proxy_audio_mode(mode)
             youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', mode.upper())}"
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
+            ui_mode = "screen"
         except YouTubeLiveError as exc:
             youtube_status_message = fit_text(str(exc), 20)
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
+            ui_mode = "screen"
 
     def trigger_portal_ack():
-        nonlocal portal_ack_last, current_screen
+        nonlocal portal_ack_last, current_screen, ui_mode
         portal_ack_last = perform_portal_ack()
         set_ui_message(portal_ack_last["message"])
         current_screen = "probe"
+        ui_mode = "screen"
 
     def open_selected_item():
-        nonlocal current_screen
+        nonlocal current_screen, ui_mode
+        if ui_mode != "menu":
+            return
         _, items = current_menu_definition()
         item = items[current_menu_entry()["selected"]]
         kind = item.get("kind")
         if kind == "screen":
             current_screen = item.get("target")
+            ui_mode = "screen"
         elif kind == "menu":
             menu_stack.append({"id": item.get("target", "root"), "selected": 0})
             current_screen = None
+            ui_mode = "menu"
         elif kind == "action":
             action = item.get("action")
             if action == "youtube_create":
@@ -923,12 +993,18 @@ def main():
 
     def handle_pressed_button(name):
         logging.info("Button pressed: %s", name)
+        if ui_mode == "home":
+            if name in ("PRESS", "RIGHT", "KEY1"):
+                open_menu()
+            elif name == "KEY3":
+                go_home()
+            return
         if name == "UP":
             move_menu(-1)
         elif name == "DOWN":
             move_menu(1)
         elif name in ("PRESS", "RIGHT", "KEY1"):
-            if current_screen is None:
+            if ui_mode == "menu":
                 open_selected_item()
         elif name in ("LEFT", "KEY2"):
             go_back()
@@ -1006,7 +1082,7 @@ def main():
         menu_title, menu_items = current_menu_definition()
 
         state = {
-            "ui_mode": "menu" if current_screen is None else "screen",
+            "ui_mode": ui_mode,
             "screen_id": current_screen,
             "screen_title": {
                 "overview": "Overview",
