@@ -245,6 +245,16 @@ def fit_text(text, max_chars):
         return text[:max_chars]
     return text[: max_chars - 1] + "."
 
+
+def translate_button_for_rotation(name):
+    mapping = {
+        "LEFT": "UP",
+        "RIGHT": "DOWN",
+        "UP": "RIGHT",
+        "DOWN": "LEFT",
+    }
+    return mapping.get(name, name)
+
 def metric_color(value, warn, danger):
     if value is None:
         return (180, 180, 180)
@@ -565,7 +575,7 @@ def render_youtube(draw, image, state):
         draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), outline=(255, 170, 170), width=1)
         draw.rectangle((bar_left + 1, bar_top + 1, bar_left + 1 + fill_width, bar_bottom - 1), fill=(255, 96, 96))
         draw.text((44, 91), f"{progress_pct:3d}%", font=FONT, fill=(255, 230, 230))
-        draw.text((10, 119), "2/L=BACK 3=HM", font=FONT, fill=(180, 180, 180))
+        draw.text((22, 119), "LEFT BACK", font=FONT, fill=(180, 180, 180))
         return
 
     if youtube.get("auth_required") and not youtube.get("qr_payload"):
@@ -574,7 +584,7 @@ def render_youtube(draw, image, state):
         draw.text((22, 40), "AUTH", font=FONT, fill=(255, 230, 230))
         draw.text((22, 56), "FIRST", font=FONT, fill=(255, 230, 230))
         draw.text((14, 78), fit_text(youtube.get("status_message", "AUTH FIRST"), 16), font=FONT, fill=(255, 210, 210))
-        draw.text((10, 119), "2/L=BACK 3=HM", font=FONT, fill=(180, 180, 180))
+        draw.text((22, 119), "LEFT BACK", font=FONT, fill=(180, 180, 180))
         return
 
     if youtube.get("qr_payload"):
@@ -584,10 +594,10 @@ def render_youtube(draw, image, state):
             draw.rectangle((0, 118, 127, 127), fill="BLACK")
             if youtube.get("mode") == "proxy":
                 draw.text((4, 119), fit_text(youtube.get("audio_mode_short", "NORM"), 5), font=FONT, fill=(140, 170, 210))
-                draw.text((40, 119), "2/L BK 3 HM", font=FONT, fill=(180, 180, 180))
+                draw.text((50, 119), "LEFT BK", font=FONT, fill=(180, 180, 180))
             else:
                 draw.text((4, 119), fit_text(youtube.get("mode", "direct").upper(), 7), font=FONT, fill=(140, 170, 210))
-                draw.text((46, 119), "2/L BK 3HM", font=FONT, fill=(180, 180, 180))
+                draw.text((56, 119), "LEFT BK", font=FONT, fill=(180, 180, 180))
             return
 
     draw.text((3, 3), "YOUTUBE", font=FONT, fill=(140, 170, 210))
@@ -604,7 +614,7 @@ def render_youtube(draw, image, state):
     elif youtube.get("mode") == "proxy":
         draw.text((3, 72), fit_text(f"AUD {youtube.get('audio_mode_label', 'Normal')}", 20), font=FONT, fill=(120, 220, 255))
     draw.text((3, 88), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(180, 180, 180))
-    draw.text((3, 101), "2/L=back 3=home", font=FONT, fill=(180, 180, 180))
+    draw.text((18, 101), "LEFT=BACK", font=FONT, fill=(180, 180, 180))
 
 def render_portal_warning(draw, state):
     if not state["probe"].get("auth_required"):
@@ -641,7 +651,7 @@ def render_matrix(draw, state):
     draw.rectangle((0, 0, 127, 15), fill=(0, 18, 0))
     draw.line((0, 16, 127, 16), fill=(0, 64, 0), width=1)
     draw.text((3, 3), "MATRIX", font=FONT, fill=(120, 255, 160))
-    draw.text((74, 3), "2/L BK", font=FONT, fill=(120, 180, 120))
+    draw.text((76, 3), "LEFT BK", font=FONT, fill=(120, 180, 120))
 
 
 def render_home(draw, state):
@@ -715,7 +725,7 @@ def render_menu(draw, state):
     message = fit_text(state.get("menu_message", ""), 20)
     if message:
         draw.text((3, 106), message, font=FONT, fill=(255, 210, 90))
-    draw.text((3, 119), "P/1 OP L/2 BK 3HM", font=FONT, fill=(120, 180, 120))
+    draw.text((18, 119), "P OK L BK", font=FONT, fill=(120, 180, 120))
 
 def render_screen(lcd, state):
     image = Image.new("RGB", (128, 128), "BLACK")
@@ -992,24 +1002,23 @@ def main():
             set_ui_message(item.get("label", "Unavailable"))
 
     def handle_pressed_button(name):
-        logging.info("Button pressed: %s", name)
-        if ui_mode == "home":
-            if name in ("PRESS", "RIGHT", "KEY1"):
-                open_menu()
-            elif name == "KEY3":
-                go_home()
+        logical_name = translate_button_for_rotation(name)
+        logging.info("Button pressed: %s -> %s", name, logical_name)
+        if name in ("KEY1", "KEY2", "KEY3"):
             return
-        if name == "UP":
+        if ui_mode == "home":
+            if logical_name == "PRESS":
+                open_menu()
+            return
+        if logical_name == "UP":
             move_menu(-1)
-        elif name == "DOWN":
+        elif logical_name == "DOWN":
             move_menu(1)
-        elif name in ("PRESS", "RIGHT", "KEY1"):
+        elif logical_name in ("PRESS", "RIGHT"):
             if ui_mode == "menu":
                 open_selected_item()
-        elif name in ("LEFT", "KEY2"):
+        elif logical_name == "LEFT":
             go_back()
-        elif name == "KEY3":
-            go_home()
 
     while True:
         now = time.time()

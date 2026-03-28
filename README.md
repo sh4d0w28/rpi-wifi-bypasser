@@ -50,11 +50,17 @@ Current web UI behavior:
 
 LCD controls:
 - The LCD now starts on a main home screen like an old phone
-- `PRESS`, `RIGHT`, or `KEY1` from home opens the main menu
-- `UP` / `DOWN` scroll the current menu
-- `PRESS`, `RIGHT`, or `KEY1` open the selected item
-- `LEFT` or `KEY2` go back one level
-- `KEY3` jumps back to the home screen
+- The screen is rotated, so joystick directions are remapped:
+  - physical `LEFT` acts as UI `UP`
+  - physical `RIGHT` acts as UI `DOWN`
+  - physical `UP` acts as UI `RIGHT`
+  - physical `DOWN` acts as UI `LEFT`
+- `PRESS` from home opens the main menu
+- remapped `UP` / `DOWN` scroll the current menu
+- `PRESS` or remapped `RIGHT` open the selected item
+- remapped `LEFT` goes back one level
+- backing out from the root menu returns to the home screen
+- `KEY1`, `KEY2`, and `KEY3` are not used by the LCD UI
 - The main menu contains:
   - `YouTube`
   - `Matrix`
