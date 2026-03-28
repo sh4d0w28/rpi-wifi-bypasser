@@ -64,13 +64,24 @@ LCD controls:
 - The main menu contains:
   - `YouTube`
   - `Matrix`
+  - `Games`
   - `FFmpeg`
   - `Settings`
+- The `Games` submenu contains:
+  - `Pong`
+  - `Catch`
 - The `YouTube` submenu contains:
   - dashboard / QR view
+  - start device auth
+  - check auth when a device code is pending
   - create stream
 - The `FFmpeg` submenu contains:
   - proxy audio mode switches when proxy mode is active
+- On the YouTube screen:
+  - `PRESS` starts device auth when YouTube is not authorized
+  - the device code and verification URL are shown on the LCD
+  - `PRESS` checks auth completion while a device code is pending
+- Matrix, games, probe checks, and YouTube state refresh only run while their related screen or menu is active
 - If `CAPTIVE_PORTAL_ACK_CMD` is configured, the `Settings` submenu also shows `Portal Ack`
 
 YouTube config:

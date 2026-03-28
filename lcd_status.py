@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import random
 import re
 import time
 import socket
@@ -19,8 +20,10 @@ from youtube_live import (
     get_auth_status,
     load_creation_state,
     load_stream_state,
+    poll_device_authorization,
     qrcode as youtube_qrcode,
     set_proxy_audio_mode,
+    start_device_authorization,
     start_stream_creation,
 )
 
@@ -584,7 +587,7 @@ def render_youtube(draw, image, state):
         draw.text((22, 40), "AUTH", font=FONT, fill=(255, 230, 230))
         draw.text((22, 56), "FIRST", font=FONT, fill=(255, 230, 230))
         draw.text((14, 78), fit_text(youtube.get("status_message", "AUTH FIRST"), 16), font=FONT, fill=(255, 210, 210))
-        draw.text((22, 119), "LEFT BACK", font=FONT, fill=(180, 180, 180))
+        draw.text((16, 119), "PRESS AUTH L BK", font=FONT, fill=(180, 180, 180))
         return
 
     if youtube.get("qr_payload"):
@@ -609,12 +612,20 @@ def render_youtube(draw, image, state):
     draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
     draw.text((3, 56), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(240, 244, 255))
     if youtube["auth"].get("device_pending"):
-        code = (youtube["auth"].get("device") or {}).get("user_code", "")
+        device = youtube["auth"].get("device") or {}
+        code = device.get("user_code", "")
+        verify = device.get("verification_url", "") or device.get("verification_url_complete", "")
         draw.text((3, 72), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
+        draw.text((3, 85), fit_text(verify.replace("https://", ""), 20), font=FONT, fill=(120, 220, 255))
+        draw.text((3, 101), "PRESS=CHECK LEFT=BK", font=FONT, fill=(180, 180, 180))
+        return
     elif youtube.get("mode") == "proxy":
         draw.text((3, 72), fit_text(f"AUD {youtube.get('audio_mode_label', 'Normal')}", 20), font=FONT, fill=(120, 220, 255))
     draw.text((3, 88), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(180, 180, 180))
-    draw.text((18, 101), "LEFT=BACK", font=FONT, fill=(180, 180, 180))
+    if not youtube["auth"].get("authorized"):
+        draw.text((12, 101), "PRESS=AUTH LEFT=BK", font=FONT, fill=(180, 180, 180))
+    else:
+        draw.text((18, 101), "LEFT=BACK", font=FONT, fill=(180, 180, 180))
 
 def render_portal_warning(draw, state):
     if not state["probe"].get("auth_required"):
@@ -684,6 +695,39 @@ def render_home(draw, state):
     draw.text((8, 120), "PRESS CENTER", font=FONT, fill=(180, 220, 180))
 
 
+def render_game_pong(draw, state):
+    game = state["games"]["pong"]
+    draw.rectangle((0, 0, 127, 127), fill="BLACK")
+    draw.line((63, 16, 63, 127), fill=(36, 72, 36), width=1)
+    draw.rectangle((4, game["player_y"], 7, game["player_y"] + 20), fill=(120, 255, 160))
+    draw.rectangle((120, game["cpu_y"], 123, game["cpu_y"] + 20), fill=(255, 210, 90))
+    draw.rectangle((game["ball_x"], game["ball_y"], game["ball_x"] + 4, game["ball_y"] + 4), fill=(240, 255, 240))
+    draw.rectangle((0, 0, 127, 15), fill=(0, 18, 0))
+    draw.text((4, 3), "PONG", font=FONT, fill=(160, 255, 160))
+    draw.text((48, 3), f"{game['player_score']}:{game['cpu_score']}", font=FONT, fill=(240, 255, 240))
+    if game["game_over"]:
+        draw.rectangle((18, 44, 109, 84), fill=(8, 24, 8), outline=(90, 180, 90))
+        draw.text((33, 50), "GAME OVER", font=FONT, fill=(255, 210, 90))
+        draw.text((28, 64), "PRESS RESTART", font=FONT, fill=(200, 230, 200))
+    draw.text((10, 119), "U/D MOVE L BK", font=FONT, fill=(120, 180, 120))
+
+
+def render_game_catch(draw, state):
+    game = state["games"]["catch"]
+    draw.rectangle((0, 0, 127, 127), fill="BLACK")
+    draw.rectangle((0, 0, 127, 15), fill=(12, 12, 44))
+    draw.text((4, 3), "CATCH", font=FONT, fill=(160, 220, 255))
+    draw.text((56, 3), f"S{game['score']} L{game['lives']}", font=FONT, fill=(240, 255, 240))
+    for item in game["drops"]:
+        draw.rectangle((item["x"], item["y"], item["x"] + 4, item["y"] + 4), fill=(255, 210, 90))
+    draw.rectangle((game["player_x"], 118, game["player_x"] + 20, 122), fill=(120, 220, 255))
+    if game["game_over"]:
+        draw.rectangle((18, 44, 109, 84), fill=(8, 16, 32), outline=(120, 180, 255))
+        draw.text((33, 50), "GAME OVER", font=FONT, fill=(255, 210, 90))
+        draw.text((28, 64), "PRESS RESTART", font=FONT, fill=(210, 230, 255))
+    draw.text((10, 119), "U/D MOVE L BK", font=FONT, fill=(120, 180, 220))
+
+
 def render_menu(draw, state):
     title = fit_text(state.get("menu_title", "Menu").upper(), 12)
     items = state.get("menu_items") or []
@@ -737,6 +781,10 @@ def render_screen(lcd, state):
         render_menu(draw, state)
     elif state["screen_id"] == "matrix":
         render_matrix(draw, state)
+    elif state["screen_id"] == "game_pong":
+        render_game_pong(draw, state)
+    elif state["screen_id"] == "game_catch":
+        render_game_catch(draw, state)
     elif state.get("ui_mode") == "screen":
         draw.rectangle((0, 0, 127, 127), fill="BLACK")
         draw.rectangle((0, 0, 127, 15), fill=(18, 18, 18))
@@ -832,6 +880,9 @@ def main():
         for idx in range(MATRIX_COLS)
     ]
     matrix_tick = 0
+    game_refresh_sec = 0.08
+    pong_game = {}
+    catch_game = {}
     request_state_refresh()
 
     def set_ui_message(message):
@@ -842,14 +893,42 @@ def main():
         return [
             {"label": "YouTube", "kind": "menu", "target": "youtube"},
             {"label": "Matrix", "kind": "screen", "target": "matrix"},
+            {"label": "Games", "kind": "menu", "target": "games"},
             {"label": "FFmpeg", "kind": "menu", "target": "ffmpeg"},
             {"label": "Settings", "kind": "menu", "target": "settings"},
         ]
+
+    def reset_pong():
+        return {
+            "player_y": 54,
+            "cpu_y": 54,
+            "ball_x": 62,
+            "ball_y": 62,
+            "ball_vx": random.choice((-3, 3)),
+            "ball_vy": random.choice((-2, -1, 1, 2)),
+            "player_score": 0,
+            "cpu_score": 0,
+            "game_over": False,
+        }
+
+    def reset_catch():
+        return {
+            "player_x": 53,
+            "drops": [],
+            "spawn_tick": 0,
+            "score": 0,
+            "lives": 3,
+            "game_over": False,
+        }
 
     def build_youtube_menu():
         items = [
             {"label": "Dashboard", "kind": "screen", "target": "youtube"},
         ]
+        if youtube_auth.get("device_pending"):
+            items.append({"label": "Check Auth", "kind": "action", "action": "youtube_auth_poll"})
+        else:
+            items.append({"label": "Start Auth", "kind": "action", "action": "youtube_auth_start"})
         if (youtube_creation or {}).get("status") == "creating":
             items.append({"label": "Create Stream", "kind": "noop", "disabled": True})
         else:
@@ -891,6 +970,11 @@ def main():
     def get_menu_definition(menu_id):
         if menu_id == "youtube":
             return "YouTube", build_youtube_menu()
+        if menu_id == "games":
+            return "Games", [
+                {"label": "Pong", "kind": "screen", "target": "game_pong"},
+                {"label": "Catch", "kind": "screen", "target": "game_catch"},
+            ]
         if menu_id == "ffmpeg":
             return "FFmpeg", build_ffmpeg_menu()
         if menu_id == "settings":
@@ -906,6 +990,20 @@ def main():
             items = [{"label": "Empty", "kind": "noop", "disabled": True}]
         current_menu_entry()["selected"] = max(0, min(current_menu_entry()["selected"], len(items) - 1))
         return title, items
+
+    def youtube_active():
+        menu_id = current_menu_entry()["id"] if menu_stack else "root"
+        return current_screen == "youtube" or menu_id in ("youtube", "ffmpeg")
+
+    def probe_active():
+        menu_id = current_menu_entry()["id"] if menu_stack else "root"
+        return current_screen == "probe" or menu_id == "settings"
+
+    def matrix_active():
+        return ui_mode == "screen" and current_screen == "matrix"
+
+    def game_active():
+        return ui_mode == "screen" and current_screen in ("game_pong", "game_catch")
 
     def move_menu(delta):
         if ui_mode != "menu":
@@ -955,6 +1053,37 @@ def main():
             current_screen = "youtube"
             ui_mode = "screen"
 
+    def trigger_youtube_auth_start():
+        nonlocal youtube_auth, youtube_status_message, current_screen, ui_mode
+        try:
+            start_device_authorization()
+            youtube_auth = get_auth_status()
+            youtube_status_message = "Open URL, enter code"
+            set_ui_message("Device code ready")
+            current_screen = "youtube"
+            ui_mode = "screen"
+        except YouTubeLiveError as exc:
+            youtube_status_message = fit_text(str(exc), 20)
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+            ui_mode = "screen"
+
+    def trigger_youtube_auth_poll():
+        nonlocal youtube_auth, youtube_status_message, current_screen, ui_mode
+        try:
+            poll_device_authorization()
+            youtube_auth = get_auth_status()
+            youtube_status_message = "Authorization OK"
+            set_ui_message("YouTube authorized")
+            current_screen = "youtube"
+            ui_mode = "screen"
+        except YouTubeLiveError as exc:
+            youtube_auth = get_auth_status()
+            youtube_status_message = fit_text(str(exc), 20)
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+            ui_mode = "screen"
+
     def trigger_youtube_audio(mode):
         nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode
         try:
@@ -977,7 +1106,7 @@ def main():
         ui_mode = "screen"
 
     def open_selected_item():
-        nonlocal current_screen, ui_mode
+        nonlocal current_screen, ui_mode, pong_game, catch_game
         if ui_mode != "menu":
             return
         _, items = current_menu_definition()
@@ -985,6 +1114,10 @@ def main():
         kind = item.get("kind")
         if kind == "screen":
             current_screen = item.get("target")
+            if current_screen == "game_pong":
+                pong_game = reset_pong()
+            elif current_screen == "game_catch":
+                catch_game = reset_catch()
             ui_mode = "screen"
         elif kind == "menu":
             menu_stack.append({"id": item.get("target", "root"), "selected": 0})
@@ -992,7 +1125,11 @@ def main():
             ui_mode = "menu"
         elif kind == "action":
             action = item.get("action")
-            if action == "youtube_create":
+            if action == "youtube_auth_start":
+                trigger_youtube_auth_start()
+            elif action == "youtube_auth_poll":
+                trigger_youtube_auth_poll()
+            elif action == "youtube_create":
                 trigger_youtube_create()
             elif action == "youtube_audio":
                 trigger_youtube_audio(item.get("arg", "normal"))
@@ -1002,6 +1139,7 @@ def main():
             set_ui_message(item.get("label", "Unavailable"))
 
     def handle_pressed_button(name):
+        nonlocal pong_game, catch_game
         logical_name = translate_button_for_rotation(name)
         logging.info("Button pressed: %s -> %s", name, logical_name)
         if name in ("KEY1", "KEY2", "KEY3"):
@@ -1011,14 +1149,36 @@ def main():
                 open_menu()
             return
         if logical_name == "UP":
-            move_menu(-1)
+            if current_screen == "game_pong":
+                pong_game["player_y"] = max(18, pong_game["player_y"] - 7)
+            elif current_screen == "game_catch":
+                catch_game["player_x"] = max(4, catch_game["player_x"] - 8)
+            else:
+                move_menu(-1)
         elif logical_name == "DOWN":
-            move_menu(1)
+            if current_screen == "game_pong":
+                pong_game["player_y"] = min(104, pong_game["player_y"] + 7)
+            elif current_screen == "game_catch":
+                catch_game["player_x"] = min(103, catch_game["player_x"] + 8)
+            else:
+                move_menu(1)
         elif logical_name in ("PRESS", "RIGHT"):
-            if ui_mode == "menu":
+            if current_screen == "youtube":
+                if youtube_auth.get("device_pending"):
+                    trigger_youtube_auth_poll()
+                elif not youtube_auth.get("authorized"):
+                    trigger_youtube_auth_start()
+            elif current_screen == "game_pong" and pong_game.get("game_over"):
+                pong_game = reset_pong()
+            elif current_screen == "game_catch" and catch_game.get("game_over"):
+                catch_game = reset_catch()
+            elif ui_mode == "menu":
                 open_selected_item()
         elif logical_name == "LEFT":
             go_back()
+
+    pong_game = reset_pong()
+    catch_game = reset_catch()
 
     while True:
         now = time.time()
@@ -1030,9 +1190,10 @@ def main():
             mem_pct = read_mem_percent()
             rx1ps = max(0, (curr[WLAN_UP]["rx"] - prev[WLAN_UP]["rx"]) / dt)
             tx1ps = max(0, (curr[WLAN_UP]["tx"] - prev[WLAN_UP]["tx"]) / dt)
-            youtube_auth = get_auth_status()
-            youtube_creation = load_creation_state()
-            youtube_stream = load_stream_state()
+            if youtube_active():
+                youtube_auth = get_auth_status()
+                youtube_creation = load_creation_state()
+                youtube_stream = load_stream_state()
             prev = curr
             prev_t = now
 
@@ -1060,18 +1221,63 @@ def main():
                 handle_pressed_button(name)
             button_states_prev[name] = is_pressed
 
-        matrix_tick += 1
-        for idx, col in enumerate(matrix_columns):
-            if matrix_tick % col["speed"] != 0:
-                continue
-            col["head"] += 1
-            if col["head"] - col["length"] > MATRIX_ROWS:
-                col["head"] = -((idx * 7 + matrix_tick) % MATRIX_ROWS)
-                col["length"] = 4 + ((idx + matrix_tick) % 9)
-                shift = (matrix_tick + idx * 3) % len(MATRIX_CHARS)
-                col["chars"] = [MATRIX_CHARS[(shift + row * 5) % len(MATRIX_CHARS)] for row in range(MATRIX_ROWS)]
+        if matrix_active():
+            matrix_tick += 1
+            for idx, col in enumerate(matrix_columns):
+                if matrix_tick % col["speed"] != 0:
+                    continue
+                col["head"] += 1
+                if col["head"] - col["length"] > MATRIX_ROWS:
+                    col["head"] = -((idx * 7 + matrix_tick) % MATRIX_ROWS)
+                    col["length"] = 4 + ((idx + matrix_tick) % 9)
+                    shift = (matrix_tick + idx * 3) % len(MATRIX_CHARS)
+                    col["chars"] = [MATRIX_CHARS[(shift + row * 5) % len(MATRIX_CHARS)] for row in range(MATRIX_ROWS)]
 
-        if now - probe_cache["last_run"] >= PROBE_INTERVAL_SEC:
+        if current_screen == "game_pong" and game_active() and not pong_game["game_over"]:
+            pong_game["cpu_y"] += 3 if pong_game["ball_y"] > pong_game["cpu_y"] + 10 else -3 if pong_game["ball_y"] < pong_game["cpu_y"] + 10 else 0
+            pong_game["cpu_y"] = max(18, min(104, pong_game["cpu_y"]))
+            pong_game["ball_x"] += pong_game["ball_vx"]
+            pong_game["ball_y"] += pong_game["ball_vy"]
+            if pong_game["ball_y"] <= 18 or pong_game["ball_y"] >= 122:
+                pong_game["ball_vy"] *= -1
+                pong_game["ball_y"] = max(18, min(122, pong_game["ball_y"]))
+            if pong_game["ball_x"] <= 8 and pong_game["player_y"] - 2 <= pong_game["ball_y"] <= pong_game["player_y"] + 22:
+                pong_game["ball_vx"] = abs(pong_game["ball_vx"])
+            if pong_game["ball_x"] >= 116 and pong_game["cpu_y"] - 2 <= pong_game["ball_y"] <= pong_game["cpu_y"] + 22:
+                pong_game["ball_vx"] = -abs(pong_game["ball_vx"])
+            if pong_game["ball_x"] < 0:
+                pong_game["cpu_score"] += 1
+                pong_game["ball_x"], pong_game["ball_y"] = 62, 62
+                pong_game["ball_vx"] = 3
+                pong_game["ball_vy"] = random.choice((-2, -1, 1, 2))
+            elif pong_game["ball_x"] > 124:
+                pong_game["player_score"] += 1
+                pong_game["ball_x"], pong_game["ball_y"] = 62, 62
+                pong_game["ball_vx"] = -3
+                pong_game["ball_vy"] = random.choice((-2, -1, 1, 2))
+            if pong_game["player_score"] >= 5 or pong_game["cpu_score"] >= 5:
+                pong_game["game_over"] = True
+
+        if current_screen == "game_catch" and game_active() and not catch_game["game_over"]:
+            catch_game["spawn_tick"] += 1
+            if catch_game["spawn_tick"] % 8 == 0:
+                catch_game["drops"].append({"x": random.randint(6, 116), "y": 18, "vy": random.randint(4, 6)})
+            next_drops = []
+            for item in catch_game["drops"]:
+                item["y"] += item["vy"]
+                caught = item["y"] >= 114 and catch_game["player_x"] - 2 <= item["x"] <= catch_game["player_x"] + 22
+                missed = item["y"] > 123
+                if caught:
+                    catch_game["score"] += 1
+                elif missed:
+                    catch_game["lives"] -= 1
+                else:
+                    next_drops.append(item)
+            catch_game["drops"] = next_drops
+            if catch_game["lives"] <= 0:
+                catch_game["game_over"] = True
+
+        if probe_active() and now - probe_cache["last_run"] >= PROBE_INTERVAL_SEC:
             connectivity = read_nm_connectivity()
             auth_required = connectivity == "portal"
             portal_capture = probe_cache.get("portal_capture", {})
@@ -1098,6 +1304,8 @@ def main():
                 "probe": "Probe",
                 "youtube": "YouTube",
                 "matrix": "Matrix",
+                "game_pong": "Pong",
+                "game_catch": "Catch",
             }.get(current_screen, "Menu"),
             "menu_title": menu_title,
             "menu_items": menu_items,
@@ -1135,12 +1343,17 @@ def main():
                 "columns": matrix_columns,
                 "tick": matrix_tick,
             },
+            "games": {
+                "pong": pong_game,
+                "catch": catch_game,
+            },
             "updated_at": now,
         }
 
         signature = state_signature(state)
+        active_refresh_sec = game_refresh_sec if current_screen in ("game_pong", "game_catch") and ui_mode == "screen" else DISPLAY_REFRESH_SEC
         should_refresh_display = bool(pressed_events) or (
-            signature != last_display_signature and now - last_display_at >= DISPLAY_REFRESH_SEC
+            signature != last_display_signature and now - last_display_at >= active_refresh_sec
         )
         if should_refresh_display:
             render_screen(lcd, state)
