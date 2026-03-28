@@ -72,6 +72,12 @@
       font-weight: 600;
     }
     button:hover { background: var(--button-hover); }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+      background: var(--field-border);
+      color: var(--muted);
+    }
     .mono { font-family: Consolas, "Courier New", monospace; color: var(--text); }
     .ok { color: var(--success); }
     .err { color: var(--error); }
@@ -288,6 +294,25 @@
       </form>
       {% endif %}
       {% endif %}
+      <h3>Software update</h3>
+      <p><strong>Script:</strong> <span class="mono">{{ update_status.script_path }}</span></p>
+      <p><strong>Update job:</strong> <span class="{{ update_status.status_class }}">{{ update_status.summary }}</span></p>
+      {% if update_status.last_started %}
+      <p><strong>Last start:</strong> <span class="mono">{{ update_status.last_started }}</span></p>
+      {% endif %}
+      {% if not update_status.service_installed %}
+      <p class="err">Install <span class="mono">{{ update_status.service_name }}</span> before using this button.</p>
+      {% elif not update_status.script_exists %}
+      <p class="err">Script not found on this host.</p>
+      {% else %}
+      <p class="help-text">Runs in its own systemd service so the web UI can restart safely during install.</p>
+      {% endif %}
+      <form method="post" action="/update" style="margin-top:12px;">
+        <button type="submit" {% if not update_status.can_start %}disabled{% endif %}>
+          {{ "Update running..." if update_status.running else "Run update script" }}
+        </button>
+      </form>
+      <p class="help-text">Logs: <span class="mono">journalctl -u {{ update_status.service_name }} -n 50</span></p>
       <form method="post" action="/disconnect">
         <button type="submit">Disconnect wlan1</button>
       </form>

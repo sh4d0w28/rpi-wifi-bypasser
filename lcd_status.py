@@ -270,10 +270,10 @@ def draw_label_value(draw, x, y, label, value, value_fill="WHITE", gap=22):
     draw.text((x + gap, y), value, font=FONT, fill=value_fill)
 
 def read_button_states():
-    if BUTTON_EVENT_MODE:
-        with BUTTON_EVENT_LOCK:
-            return dict(BUTTON_STATE_CACHE)
-    return {name: button_pressed(name, pin) for name, pin in BUTTON_PINS.items()}
+    states = {name: button_pressed(name, pin) for name, pin in BUTTON_PINS.items()}
+    with BUTTON_EVENT_LOCK:
+        BUTTON_STATE_CACHE.update(states)
+    return states
 
 def drain_button_events():
     with BUTTON_EVENT_LOCK:
@@ -530,7 +530,7 @@ def render_probe(draw, state):
     portal_fill = (255, 210, 90) if probe["portal_suspected"] else (120, 255, 160) if probe["internet_ok"] else (255, 96, 96)
     portal_text = "PORTAL" if probe["portal_suspected"] else "ONLINE" if probe["internet_ok"] else "OFFLINE"
     draw.text((3, 82), portal_text, font=FONT, fill=portal_fill)
-    ack_hint = "K3=ACK" if state["portal_ack_configured"] else "no-ack"
+    ack_hint = "MENU ACK" if state["portal_ack_configured"] else "no-ack"
     draw.text((58, 82), ack_hint, font=FONT, fill=(180, 180, 180))
 
     if state["portal_ack_last"]:
@@ -565,7 +565,7 @@ def render_youtube(draw, image, state):
         draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), outline=(255, 170, 170), width=1)
         draw.rectangle((bar_left + 1, bar_top + 1, bar_left + 1 + fill_width, bar_bottom - 1), fill=(255, 96, 96))
         draw.text((44, 91), f"{progress_pct:3d}%", font=FONT, fill=(255, 230, 230))
-        draw.text((10, 119), "RIGHT=BACK", font=FONT, fill=(180, 180, 180))
+        draw.text((10, 119), "2/L=BACK 3=HM", font=FONT, fill=(180, 180, 180))
         return
 
     if youtube.get("auth_required") and not youtube.get("qr_payload"):
@@ -574,7 +574,7 @@ def render_youtube(draw, image, state):
         draw.text((22, 40), "AUTH", font=FONT, fill=(255, 230, 230))
         draw.text((22, 56), "FIRST", font=FONT, fill=(255, 230, 230))
         draw.text((14, 78), fit_text(youtube.get("status_message", "AUTH FIRST"), 16), font=FONT, fill=(255, 210, 210))
-        draw.text((10, 119), "RIGHT=BACK", font=FONT, fill=(180, 180, 180))
+        draw.text((10, 119), "2/L=BACK 3=HM", font=FONT, fill=(180, 180, 180))
         return
 
     if youtube.get("qr_payload"):
@@ -584,10 +584,10 @@ def render_youtube(draw, image, state):
             draw.rectangle((0, 118, 127, 127), fill="BLACK")
             if youtube.get("mode") == "proxy":
                 draw.text((4, 119), fit_text(youtube.get("audio_mode_short", "NORM"), 5), font=FONT, fill=(140, 170, 210))
-                draw.text((40, 119), "P=NEW 1N2V3M", font=FONT, fill=(180, 180, 180))
+                draw.text((40, 119), "2/L BK 3 HM", font=FONT, fill=(180, 180, 180))
             else:
                 draw.text((4, 119), fit_text(youtube.get("mode", "direct").upper(), 7), font=FONT, fill=(140, 170, 210))
-                draw.text((46, 119), "PRESS=NEW", font=FONT, fill=(180, 180, 180))
+                draw.text((46, 119), "2/L BK 3HM", font=FONT, fill=(180, 180, 180))
             return
 
     draw.text((3, 3), "YOUTUBE", font=FONT, fill=(140, 170, 210))
@@ -597,18 +597,14 @@ def render_youtube(draw, image, state):
     draw.text((3, 20), fit_text(youtube.get("title", "No stream yet"), 20), font=FONT, fill=(240, 244, 255))
     draw.text((3, 33), fit_text(youtube.get("watch_url", "Use web UI"), 20), font=FONT, fill=(120, 220, 255))
     draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
-    draw.text((3, 56), fit_text(youtube.get("status_message", "LEFT=YT PRESS=GO"), 20), font=FONT, fill=(240, 244, 255))
+    draw.text((3, 56), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(240, 244, 255))
     if youtube["auth"].get("device_pending"):
         code = (youtube["auth"].get("device") or {}).get("user_code", "")
         draw.text((3, 72), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
     elif youtube.get("mode") == "proxy":
         draw.text((3, 72), fit_text(f"AUD {youtube.get('audio_mode_label', 'Normal')}", 20), font=FONT, fill=(120, 220, 255))
-    if youtube.get("mode") == "proxy":
-        draw.text((3, 88), "1=norm 2=vox 3=mute", font=FONT, fill=(180, 180, 180))
-        draw.text((3, 101), "P=create R=back", font=FONT, fill=(180, 180, 180))
-    else:
-        draw.text((3, 88), "PRESS=create", font=FONT, fill=(180, 180, 180))
-        draw.text((3, 101), "RIGHT=back", font=FONT, fill=(180, 180, 180))
+    draw.text((3, 88), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(180, 180, 180))
+    draw.text((3, 101), "2/L=back 3=home", font=FONT, fill=(180, 180, 180))
 
 def render_portal_warning(draw, state):
     if not state["probe"].get("auth_required"):
@@ -645,26 +641,71 @@ def render_matrix(draw, state):
     draw.rectangle((0, 0, 127, 15), fill=(0, 18, 0))
     draw.line((0, 16, 127, 16), fill=(0, 64, 0), width=1)
     draw.text((3, 3), "MATRIX", font=FONT, fill=(120, 255, 160))
-    draw.text((74, 3), "RIGHT=BK", font=FONT, fill=(120, 180, 120))
+    draw.text((74, 3), "2/L BK", font=FONT, fill=(120, 180, 120))
+
+
+def render_menu(draw, state):
+    title = fit_text(state.get("menu_title", "Menu").upper(), 12)
+    items = state.get("menu_items") or []
+    selected = state.get("menu_selected", 0)
+    if items:
+        selected = max(0, min(selected, len(items) - 1))
+    else:
+        selected = 0
+
+    draw.rectangle((0, 0, 127, 127), fill="BLACK")
+    draw.rectangle((0, 0, 127, 15), fill=(0, 24, 0))
+    draw.line((0, 16, 127, 16), fill=(0, 72, 0), width=1)
+    draw.text((3, 3), title, font=FONT, fill=(160, 255, 160))
+    draw.text((88, 3), "MENU", font=FONT, fill=(120, 180, 120))
+
+    visible_rows = 6
+    row_height = 14
+    top_index = 0
+    if len(items) > visible_rows:
+        top_index = max(0, min(selected - (visible_rows - 1), len(items) - visible_rows))
+
+    for row in range(visible_rows):
+        idx = top_index + row
+        if idx >= len(items):
+            break
+        item = items[idx]
+        y = 20 + (row * row_height)
+        is_selected = idx == selected
+        label = item.get("label", "-")
+        if item.get("checked"):
+            label = f"{label} *"
+        text = fit_text(label, 18)
+        fill = (255, 255, 255) if not item.get("disabled") else (120, 120, 120)
+        if is_selected:
+            draw.rectangle((2, y - 1, 125, y + 10), fill=(32, 72, 32), outline=(120, 200, 120))
+            fill = (240, 255, 240) if not item.get("disabled") else (180, 180, 180)
+        draw.text((6, y), text, font=FONT, fill=fill)
+
+    message = fit_text(state.get("menu_message", ""), 20)
+    if message:
+        draw.text((3, 106), message, font=FONT, fill=(255, 210, 90))
+    draw.text((3, 119), "P/1 OP L/2 BK 3HM", font=FONT, fill=(120, 180, 120))
 
 def render_screen(lcd, state):
     image = Image.new("RGB", (128, 128), "BLACK")
     draw = ImageDraw.Draw(image)
 
-    if state["page"] == 3:
+    if state.get("ui_mode") == "menu":
+        render_menu(draw, state)
+    elif state["screen_id"] == "matrix":
         render_matrix(draw, state)
-    else:
+    elif state.get("ui_mode") == "screen":
         draw.rectangle((0, 0, 127, 127), fill="BLACK")
         draw.rectangle((0, 0, 127, 15), fill=(18, 18, 18))
         draw.line((0, 16, 127, 16), fill=(64, 64, 64), width=1)
-        draw.text((108, 3), f"P{state['page'] + 1}", font=FONT, fill=(180, 180, 180))
-    if state["page"] == 0:
+    if state.get("ui_mode") == "screen" and state["screen_id"] == "overview":
         render_overview(draw, state)
-    elif state["page"] == 1:
+    elif state.get("ui_mode") == "screen" and state["screen_id"] == "probe":
         render_probe(draw, state)
-    elif state["page"] == 2:
+    elif state.get("ui_mode") == "screen" and state["screen_id"] == "youtube":
         render_youtube(draw, image, state)
-    if state["page"] != 3:
+    if state.get("ui_mode") == "screen" and state["screen_id"] in ("overview", "probe", "youtube"):
         render_portal_warning(draw, state)
 
     lcd.LCD_ShowImage(image.rotate(90), 0, 0)
@@ -728,8 +769,10 @@ def main():
     youtube_auth = get_auth_status()
     youtube_creation = load_creation_state()
     youtube_stream = load_stream_state()
-    youtube_status_message = "LEFT=YT PRESS=GO"
-    page = 0
+    youtube_status_message = "Use YT menu"
+    menu_stack = [{"id": "root", "selected": 0}]
+    current_screen = None
+    ui_message = ""
     last_display_at = 0.0
     last_network_refresh_at = 0.0
     last_status_write_at = 0.0
@@ -748,45 +791,149 @@ def main():
     matrix_tick = 0
     request_state_refresh()
 
+    def set_ui_message(message):
+        nonlocal ui_message
+        ui_message = fit_text(message or "", 20)
+
+    def build_root_menu():
+        items = [
+            {"label": "Overview", "kind": "screen", "target": "overview"},
+            {"label": "Probe", "kind": "screen", "target": "probe"},
+            {"label": "YouTube", "kind": "menu", "target": "youtube"},
+            {"label": "Matrix", "kind": "screen", "target": "matrix"},
+        ]
+        if CAPTIVE_PORTAL_ACK_CMD:
+            items.append({"label": "Portal Ack", "kind": "action", "action": "portal_ack"})
+        return items
+
+    def build_youtube_menu():
+        items = [
+            {"label": "Dashboard", "kind": "screen", "target": "youtube"},
+        ]
+        if (youtube_creation or {}).get("status") == "creating":
+            items.append({"label": "Create Stream", "kind": "noop", "disabled": True})
+        else:
+            items.append({"label": "Create Stream", "kind": "action", "action": "youtube_create"})
+        if youtube_stream.get("mode") == "proxy":
+            for mode, label in (
+                ("normal", "Audio Normal"),
+                ("voice", "Audio Voice"),
+                ("mute", "Audio Mute"),
+            ):
+                items.append(
+                    {
+                        "label": label,
+                        "kind": "action",
+                        "action": "youtube_audio",
+                        "arg": mode,
+                        "checked": youtube_stream.get("audio_mode") == mode,
+                    }
+                )
+        return items
+
+    def get_menu_definition(menu_id):
+        if menu_id == "youtube":
+            return "YouTube", build_youtube_menu()
+        return "Main", build_root_menu()
+
+    def current_menu_entry():
+        return menu_stack[-1]
+
+    def current_menu_definition():
+        title, items = get_menu_definition(current_menu_entry()["id"])
+        if not items:
+            items = [{"label": "Empty", "kind": "noop", "disabled": True}]
+        current_menu_entry()["selected"] = max(0, min(current_menu_entry()["selected"], len(items) - 1))
+        return title, items
+
+    def move_menu(delta):
+        if current_screen is not None:
+            return
+        _, items = current_menu_definition()
+        current_menu_entry()["selected"] = (current_menu_entry()["selected"] + delta) % len(items)
+
+    def go_back():
+        nonlocal current_screen
+        if current_screen is not None:
+            current_screen = None
+        elif len(menu_stack) > 1:
+            menu_stack.pop()
+
+    def go_home():
+        nonlocal current_screen
+        current_screen = None
+        del menu_stack[1:]
+
+    def trigger_youtube_create():
+        nonlocal youtube_creation, youtube_status_message, current_screen
+        if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
+            youtube_status_message = "AUTH FIRST"
+            set_ui_message("AUTH FIRST")
+            current_screen = "youtube"
+            return
+        try:
+            start_stream_creation(ap_ip=w0)
+            youtube_creation = load_creation_state()
+            youtube_status_message = "Stream is creating"
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+        except YouTubeLiveError as exc:
+            youtube_status_message = fit_text(str(exc), 20)
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+
+    def trigger_youtube_audio(mode):
+        nonlocal youtube_stream, youtube_status_message, current_screen
+        try:
+            youtube_stream = set_proxy_audio_mode(mode)
+            youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', mode.upper())}"
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+        except YouTubeLiveError as exc:
+            youtube_status_message = fit_text(str(exc), 20)
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+
+    def trigger_portal_ack():
+        nonlocal portal_ack_last, current_screen
+        portal_ack_last = perform_portal_ack()
+        set_ui_message(portal_ack_last["message"])
+        current_screen = "probe"
+
+    def open_selected_item():
+        nonlocal current_screen
+        _, items = current_menu_definition()
+        item = items[current_menu_entry()["selected"]]
+        kind = item.get("kind")
+        if kind == "screen":
+            current_screen = item.get("target")
+        elif kind == "menu":
+            menu_stack.append({"id": item.get("target", "root"), "selected": 0})
+            current_screen = None
+        elif kind == "action":
+            action = item.get("action")
+            if action == "youtube_create":
+                trigger_youtube_create()
+            elif action == "youtube_audio":
+                trigger_youtube_audio(item.get("arg", "normal"))
+            elif action == "portal_ack":
+                trigger_portal_ack()
+        elif item.get("disabled"):
+            set_ui_message(item.get("label", "Unavailable"))
+
     def handle_pressed_button(name):
-        nonlocal page, youtube_status_message, youtube_creation, youtube_stream
         logging.info("Button pressed: %s", name)
-        if name == "UP" and page == 0:
-            page = 3
-        elif name == "LEFT":
-            page = 2
-        elif name == "RIGHT" and page in (2, 3):
-            page = 0
-        elif name == "PRESS" and page == 2:
-            if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
-                youtube_status_message = "AUTH FIRST"
-            else:
-                try:
-                    start_stream_creation(ap_ip=w0)
-                    youtube_creation = load_creation_state()
-                    youtube_status_message = "Stream is creating"
-                except YouTubeLiveError as exc:
-                    youtube_status_message = fit_text(str(exc), 20)
-        elif name == "KEY1" and page == 2 and youtube_stream.get("mode") == "proxy":
-            try:
-                youtube_stream = set_proxy_audio_mode("normal")
-                youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', 'NORM')}"
-            except YouTubeLiveError as exc:
-                youtube_status_message = fit_text(str(exc), 20)
-        elif name == "KEY2" and page == 2 and youtube_stream.get("mode") == "proxy":
-            try:
-                youtube_stream = set_proxy_audio_mode("voice")
-                youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', 'VOICE')}"
-            except YouTubeLiveError as exc:
-                youtube_status_message = fit_text(str(exc), 20)
-        elif name == "KEY3" and page == 2 and youtube_stream.get("mode") == "proxy":
-            try:
-                youtube_stream = set_proxy_audio_mode("mute")
-                youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', 'MUTE')}"
-            except YouTubeLiveError as exc:
-                youtube_status_message = fit_text(str(exc), 20)
-        elif name == "PRESS":
-            page = (page + 1) % 2
+        if name == "UP":
+            move_menu(-1)
+        elif name == "DOWN":
+            move_menu(1)
+        elif name in ("PRESS", "RIGHT", "KEY1"):
+            if current_screen is None:
+                open_selected_item()
+        elif name in ("LEFT", "KEY2"):
+            go_back()
+        elif name == "KEY3":
+            go_home()
 
     while True:
         now = time.time()
@@ -819,20 +966,14 @@ def main():
             last_network_refresh_at = now
 
         button_states = read_button_states()
-        pressed_events = []
         if BUTTON_EVENT_MODE:
-            for event_ts, name, is_pressed in drain_button_events():
-                button_states_prev[name] = is_pressed
-                if not is_pressed:
-                    continue
+            drain_button_events()
+        pressed_events = []
+        for name, is_pressed in button_states.items():
+            if is_pressed and not button_states_prev[name]:
                 pressed_events.append(name)
                 handle_pressed_button(name)
-        else:
-            for name, is_pressed in button_states.items():
-                if is_pressed and not button_states_prev[name]:
-                    pressed_events.append(name)
-                    handle_pressed_button(name)
-                button_states_prev[name] = is_pressed
+            button_states_prev[name] = is_pressed
 
         matrix_tick += 1
         for idx, col in enumerate(matrix_columns):
@@ -862,16 +1003,21 @@ def main():
                 "portal_capture": portal_capture,
             }
 
-        if "KEY3" in pressed_events and probe_cache["portal_suspected"] and not (page == 2 and youtube_stream.get("mode") == "proxy"):
-            portal_ack_last = perform_portal_ack()
-            logging.info(
-                "Portal action via KEY3: ok=%s message=%s",
-                portal_ack_last["ok"],
-                portal_ack_last["message"],
-            )
+        menu_title, menu_items = current_menu_definition()
 
         state = {
-            "page": page,
+            "ui_mode": "menu" if current_screen is None else "screen",
+            "screen_id": current_screen,
+            "screen_title": {
+                "overview": "Overview",
+                "probe": "Probe",
+                "youtube": "YouTube",
+                "matrix": "Matrix",
+            }.get(current_screen, "Menu"),
+            "menu_title": menu_title,
+            "menu_items": menu_items,
+            "menu_selected": current_menu_entry()["selected"],
+            "menu_message": ui_message,
             "ap_name": ap_name,
             "w0": w0,
             "w1": w1,
@@ -918,13 +1064,13 @@ def main():
 
         should_write_status = (
             signature != last_status_signature and now - last_status_write_at >= STATUS_WRITE_SEC
-        ) or ("KEY3" in pressed_events)
+        ) or bool(pressed_events)
         if should_write_status:
             atomic_write_json(STATUS_PATH, state)
             last_status_write_at = now
             last_status_signature = signature
 
-        time.sleep(BUTTON_POLL_SEC if not BUTTON_EVENT_MODE else min(BUTTON_POLL_SEC, 0.2))
+        time.sleep(BUTTON_POLL_SEC)
 
 if __name__ == "__main__":
     main()

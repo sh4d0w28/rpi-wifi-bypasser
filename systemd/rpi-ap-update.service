@@ -1,0 +1,11 @@
+[Unit]
+Description=RPi AP tools updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pi
+ExecStart=/usr/bin/env bash /home/pi/update.sh
+TimeoutStartSec=0
+User=root

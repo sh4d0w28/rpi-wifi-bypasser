@@ -27,6 +27,8 @@ HOSTAPD_CONF = Path(os.environ.get("HOSTAPD_CONF", "/etc/hostapd/hostapd.conf"))
 WIFI_DB_PATH = Path(os.environ.get("WIFI_DB_PATH", "/etc/rpi_ap_tools_wifi_db.json"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
+UPDATE_SERVICE_NAME = os.environ.get("UPDATE_SERVICE_NAME", "rpi-ap-update.service").strip() or "rpi-ap-update.service"
+UPDATE_SCRIPT_PATH = Path("/home/pi/update.sh")
 WIFI_SCAN_CACHE_SEC = float(os.environ.get("WIFI_SCAN_CACHE_SEC", "10.0"))
 WIFI_RESCAN_MIN_INTERVAL_SEC = float(os.environ.get("WIFI_RESCAN_MIN_INTERVAL_SEC", "30.0"))
 SCAN_CACHE = {"rows": [], "cached_at": 0.0, "rescanned_at": 0.0}
@@ -242,6 +244,109 @@ def run_portal_ack():
         return False, str(exc)
 
 
+def systemd_show(unit_name, properties):
+    proc = run(["systemctl", "show", unit_name, f"--property={','.join(properties)}"], check=False)
+    if proc.returncode != 0:
+        return {}
+
+    data = {}
+    for line in proc.stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        data[key] = value
+    return data
+
+
+def load_update_status():
+    props = systemd_show(
+        UPDATE_SERVICE_NAME,
+        [
+            "LoadState",
+            "ActiveState",
+            "SubState",
+            "Result",
+            "ExecMainStatus",
+            "ExecMainStartTimestamp",
+        ],
+    )
+    script_exists = UPDATE_SCRIPT_PATH.is_file()
+    if not props:
+        return {
+            "service_name": UPDATE_SERVICE_NAME,
+            "script_path": str(UPDATE_SCRIPT_PATH),
+            "script_exists": script_exists,
+            "service_installed": False,
+            "running": False,
+            "load_state": "unknown",
+            "active_state": "unknown",
+            "sub_state": "unknown",
+            "summary": "update service unavailable",
+            "status_class": "err",
+            "last_started": "",
+            "can_start": False,
+        }
+
+    load_state = props.get("LoadState", "unknown")
+    active_state = props.get("ActiveState", "unknown")
+    sub_state = props.get("SubState", "unknown")
+    result = props.get("Result", "")
+    exec_main_status = props.get("ExecMainStatus", "")
+    last_started = props.get("ExecMainStartTimestamp", "")
+    running = active_state in ("active", "activating", "reloading")
+    service_installed = load_state not in ("not-found", "unknown", "")
+
+    if not service_installed:
+        summary = "update service not installed"
+        status_class = "err"
+    elif running:
+        summary = "update is running"
+        status_class = ""
+    elif last_started and result and result != "success":
+        detail = f" ({result}"
+        if exec_main_status and exec_main_status != "0":
+            detail += f", exit {exec_main_status}"
+        detail += ")"
+        summary = f"last run failed{detail}"
+        status_class = "err"
+    elif last_started:
+        summary = "last run succeeded"
+        status_class = "ok"
+    else:
+        summary = "idle"
+        status_class = ""
+
+    return {
+        "service_name": UPDATE_SERVICE_NAME,
+        "script_path": str(UPDATE_SCRIPT_PATH),
+        "script_exists": script_exists,
+        "service_installed": service_installed,
+        "running": running,
+        "load_state": load_state,
+        "active_state": active_state,
+        "sub_state": sub_state,
+        "summary": summary,
+        "status_class": status_class,
+        "last_started": last_started,
+        "can_start": service_installed and script_exists and not running,
+    }
+
+
+def start_update_service():
+    status = load_update_status()
+    if not status["service_installed"]:
+        return False, f"{UPDATE_SERVICE_NAME} is not installed"
+    if not status["script_exists"]:
+        return False, f"Update script not found: {UPDATE_SCRIPT_PATH}"
+    if status["running"]:
+        return False, "Update already running"
+
+    proc = run(["systemctl", "start", "--no-block", UPDATE_SERVICE_NAME], check=False)
+    if proc.returncode != 0:
+        return False, proc.stderr.strip() or proc.stdout.strip() or f"Failed to start {UPDATE_SERVICE_NAME}"
+    return True, "Update started. The web UI may restart while install runs."
+
+
 @APP.route("/", methods=["GET"])
 def index():
     wifi_list = scan_wifi()
@@ -264,6 +369,7 @@ def index():
         top_wifi=wifi_list[:6],
         runtime=runtime,
         portal_ack_available=bool(CAPTIVE_PORTAL_ACK_CMD),
+        update_status=load_update_status(),
         youtube_auth=youtube_auth,
         youtube_ready=youtube_ready,
         youtube_creation=youtube_creation,
@@ -312,6 +418,13 @@ def disconnect():
 @APP.route("/portal-ack", methods=["POST"])
 def portal_ack():
     ok, msg = run_portal_ack()
+    flash(msg, "success" if ok else "error")
+    return redirect(url_for("index"))
+
+
+@APP.route("/update", methods=["POST"])
+def update():
+    ok, msg = start_update_service()
     flash(msg, "success" if ok else "error")
     return redirect(url_for("index"))
 

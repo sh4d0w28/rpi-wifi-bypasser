@@ -87,6 +87,7 @@ done
 sudo cp "$INSTALL_DIR"/systemd/rpi-wlan1-ui.service /etc/systemd/system/
 sudo cp "$INSTALL_DIR"/systemd/rpi-lcd-status.service /etc/systemd/system/
 sudo cp "$INSTALL_DIR"/systemd/rpi-shared-egress.service /etc/systemd/system/
+sudo cp "$INSTALL_DIR"/systemd/rpi-ap-update.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable rpi-shared-egress.service
 sudo systemctl enable rpi-wlan1-ui.service
@@ -129,3 +130,5 @@ echo "Restart services:"
 echo "  sudo systemctl restart rpi-shared-egress.service"
 echo "  sudo systemctl restart rpi-wlan1-ui.service"
 echo "  sudo systemctl restart rpi-lcd-status.service"
+echo "Run update service manually:"
+echo "  sudo systemctl start --no-block rpi-ap-update.service"
