@@ -82,6 +82,26 @@ ROTATION_MODE_SPECS = {
         "transpose": "2",
     },
 }
+FPS_MODE_SPECS = {
+    "original": {
+        "label": "Original",
+        "short_label": "ORIG",
+        "description": "Keep the incoming frame rate unchanged.",
+        "fps": None,
+    },
+    "30": {
+        "label": "30 FPS",
+        "short_label": "30FPS",
+        "description": "Cap outgoing video at 30 fps.",
+        "fps": "30",
+    },
+    "20": {
+        "label": "20 FPS",
+        "short_label": "20FPS",
+        "description": "Cap outgoing video at 20 fps to reduce relay CPU load.",
+        "fps": "20",
+    },
+}
 if DEFAULT_PROXY_AUDIO_MODE not in AUDIO_MODE_SPECS:
     DEFAULT_PROXY_AUDIO_MODE = "normal"
 
@@ -128,6 +148,22 @@ def list_rotation_modes():
     ]
 
 
+def normalize_fps_mode(mode):
+    value = str(mode or "").strip().lower()
+    return value if value in FPS_MODE_SPECS else "original"
+
+
+def fps_mode_spec(mode):
+    return FPS_MODE_SPECS[normalize_fps_mode(mode)]
+
+
+def list_fps_modes():
+    return [
+        {"value": value, **spec}
+        for value, spec in FPS_MODE_SPECS.items()
+    ]
+
+
 def _decorate_audio_mode_fields(state, *, default_mode=None):
     if not isinstance(state, dict) or not state:
         return {}
@@ -154,9 +190,23 @@ def _decorate_rotation_fields(state, *, default_mode=None):
     return payload
 
 
-def _decorate_stream_state(state, *, default_audio_mode=None, default_rotation=None):
+def _decorate_fps_fields(state, *, default_mode=None):
+    if not isinstance(state, dict) or not state:
+        return {}
+    payload = dict(state)
+    mode = normalize_fps_mode(payload.get("fps_mode") or default_mode or "original")
+    spec = fps_mode_spec(mode)
+    payload["fps_mode"] = mode
+    payload["fps_mode_label"] = spec["label"]
+    payload["fps_mode_short"] = spec["short_label"]
+    payload["fps_mode_description"] = spec["description"]
+    return payload
+
+
+def _decorate_stream_state(state, *, default_audio_mode=None, default_rotation=None, default_fps_mode=None):
     payload = _decorate_audio_mode_fields(state, default_mode=default_audio_mode)
-    return _decorate_rotation_fields(payload, default_mode=default_rotation)
+    payload = _decorate_rotation_fields(payload, default_mode=default_rotation)
+    return _decorate_fps_fields(payload, default_mode=default_fps_mode)
 
 
 def _load_json(path, default):
@@ -276,10 +326,16 @@ def clear_device_state():
 
 
 def load_stream_state():
-    state = _decorate_stream_state(_load_json(STREAM_STATE_PATH, {}), default_audio_mode="normal", default_rotation="0")
+    state = _decorate_stream_state(
+        _load_json(STREAM_STATE_PATH, {}),
+        default_audio_mode="normal",
+        default_rotation="0",
+        default_fps_mode="original",
+    )
     if state.get("mode") == "proxy":
         state["audio_mode"] = normalize_audio_mode(state.get("audio_mode") or DEFAULT_PROXY_AUDIO_MODE)
         state["rotation"] = normalize_rotation_mode(state.get("rotation"))
+        state["fps_mode"] = normalize_fps_mode(state.get("fps_mode"))
         relay = load_relay_state()
         if relay:
             state["relay"] = relay
@@ -287,12 +343,16 @@ def load_stream_state():
                 state,
                 default_audio_mode=relay.get("audio_mode"),
                 default_rotation=relay.get("rotation"),
+                default_fps_mode=relay.get("fps_mode"),
             )
     return state
 
 
 def save_stream_state(state):
-    _save_json(STREAM_STATE_PATH, _decorate_stream_state(state, default_audio_mode="normal", default_rotation="0"))
+    _save_json(
+        STREAM_STATE_PATH,
+        _decorate_stream_state(state, default_audio_mode="normal", default_rotation="0", default_fps_mode="original"),
+    )
 
 
 def load_relay_state():
@@ -302,7 +362,12 @@ def load_relay_state():
 def save_relay_state(state):
     _save_json(
         RELAY_STATE_PATH,
-        _decorate_stream_state(state, default_audio_mode=DEFAULT_PROXY_AUDIO_MODE, default_rotation="0"),
+        _decorate_stream_state(
+            state,
+            default_audio_mode=DEFAULT_PROXY_AUDIO_MODE,
+            default_rotation="0",
+            default_fps_mode="original",
+        ),
     )
 
 
@@ -328,13 +393,14 @@ def update_creation_state(**fields):
     save_creation_state(state)
 
 
-def reset_creation_log(*, ap_ip="-", title="", rotation="0"):
+def reset_creation_log(*, ap_ip="-", title="", rotation="0", fps_mode="original"):
     CREATION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     header = [
         f"[{datetime.now(timezone.utc).isoformat()}] stream creation requested",
         f"ap_ip={ap_ip or '-'}",
         f"title={title or '-'}",
         f"rotation={normalize_rotation_mode(rotation)}",
+        f"fps_mode={normalize_fps_mode(fps_mode)}",
         "",
     ]
     CREATION_LOG_PATH.write_text("\n".join(header), encoding="utf-8")
@@ -388,7 +454,12 @@ def normalize_creation_state(state):
 def normalize_relay_state(state):
     if not isinstance(state, dict):
         return {}
-    state = _decorate_stream_state(state, default_audio_mode=DEFAULT_PROXY_AUDIO_MODE, default_rotation="0")
+    state = _decorate_stream_state(
+        state,
+        default_audio_mode=DEFAULT_PROXY_AUDIO_MODE,
+        default_rotation="0",
+        default_fps_mode="original",
+    )
     state = _populate_relay_video_fields(state)
     pid = state.get("pid")
     if not pid:
@@ -701,9 +772,11 @@ def _relay_audio_filter():
     )
 
 
-def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation):
+def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode):
     rotation = normalize_rotation_mode(rotation)
     rotation_spec = rotation_mode_spec(rotation)
+    fps_mode = normalize_fps_mode(fps_mode)
+    fps_spec = fps_mode_spec(fps_mode)
     argv = [
         FFMPEG_BIN,
         "-hide_banner",
@@ -728,11 +801,16 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation):
         "-af",
         _relay_audio_filter(),
     ]
+    video_filters = []
     if rotation_spec.get("transpose"):
+        video_filters.append(f"transpose={rotation_spec['transpose']}")
+    if fps_spec.get("fps"):
+        video_filters.append(f"fps={fps_spec['fps']}")
+    if video_filters:
         argv.extend(
             [
                 "-vf",
-                f"transpose={rotation_spec['transpose']}",
+                ",".join(video_filters),
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -914,7 +992,7 @@ def _stop_proxy_relay():
     )
 
 
-def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None, rotation=None):
+def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None, rotation=None, fps_mode=None):
     if not target_url:
         raise YouTubeLiveError("Missing YouTube RTMP target for proxy relay")
     _stop_proxy_relay()
@@ -922,7 +1000,14 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None,
     log_handle = RELAY_LOG_PATH.open("ab")
     audio_mode = normalize_audio_mode(audio_mode)
     rotation = normalize_rotation_mode(rotation)
-    argv = _proxy_relay_argv(listen_url=listen_url, target_url=target_url, audio_mode=audio_mode, rotation=rotation)
+    fps_mode = normalize_fps_mode(fps_mode)
+    argv = _proxy_relay_argv(
+        listen_url=listen_url,
+        target_url=target_url,
+        audio_mode=audio_mode,
+        rotation=rotation,
+        fps_mode=fps_mode,
+    )
     try:
         proc = subprocess.Popen(
             argv,
@@ -950,12 +1035,14 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None,
             "stream_title": stream_title,
             "started_at": time.time(),
             "ffmpeg_bin": FFMPEG_BIN,
-            "mode": "transcode-video-live-audio" if rotation != "0" else "copy-video-live-audio",
+            "mode": "transcode-video-live-audio" if rotation != "0" or fps_mode != "original" else "copy-video-live-audio",
             "audio_mode": audio_mode,
             "rotation": rotation,
+            "fps_mode": fps_mode,
         },
         default_audio_mode=audio_mode,
         default_rotation=rotation,
+        default_fps_mode=fps_mode,
     )
     if audio_mode != "normal":
         try:
@@ -1005,14 +1092,76 @@ def set_proxy_audio_mode(mode):
             stream_title=state.get("title", ""),
             audio_mode=desired_mode,
             rotation=state.get("rotation"),
+            fps_mode=state.get("fps_mode"),
         )
     save_stream_state(state)
     return load_stream_state()
 
 
-def create_stream_bundle(*, ap_ip="-", title=None, rotation=None):
+def set_proxy_rotation_mode(mode):
+    desired_mode = normalize_rotation_mode(mode)
+    state = load_stream_state()
+    if not state:
+        raise YouTubeLiveError("No YouTube stream has been created yet")
+    if state.get("mode") != "proxy":
+        raise YouTubeLiveError("Rotation switching is only available when proxy relay mode is enabled")
+    listen_url = state.get("proxy_listen_url", "")
+    target_url = state.get("target_url", "")
+    if not listen_url or not target_url:
+        raise YouTubeLiveError("Proxy relay settings are incomplete")
+
+    current_mode = normalize_rotation_mode((state.get("relay") or {}).get("rotation") or state.get("rotation"))
+    relay = state.get("relay") or {}
+    if current_mode == desired_mode and relay.get("running"):
+        return load_stream_state()
+
+    state["rotation"] = desired_mode
+    state["relay"] = _start_proxy_relay(
+        listen_url=listen_url,
+        target_url=target_url,
+        stream_title=state.get("title", ""),
+        audio_mode=state.get("audio_mode"),
+        rotation=desired_mode,
+        fps_mode=state.get("fps_mode"),
+    )
+    save_stream_state(state)
+    return load_stream_state()
+
+
+def set_proxy_fps_mode(mode):
+    desired_mode = normalize_fps_mode(mode)
+    state = load_stream_state()
+    if not state:
+        raise YouTubeLiveError("No YouTube stream has been created yet")
+    if state.get("mode") != "proxy":
+        raise YouTubeLiveError("FPS switching is only available when proxy relay mode is enabled")
+    listen_url = state.get("proxy_listen_url", "")
+    target_url = state.get("target_url", "")
+    if not listen_url or not target_url:
+        raise YouTubeLiveError("Proxy relay settings are incomplete")
+
+    current_mode = normalize_fps_mode((state.get("relay") or {}).get("fps_mode") or state.get("fps_mode"))
+    relay = state.get("relay") or {}
+    if current_mode == desired_mode and relay.get("running"):
+        return load_stream_state()
+
+    state["fps_mode"] = desired_mode
+    state["relay"] = _start_proxy_relay(
+        listen_url=listen_url,
+        target_url=target_url,
+        stream_title=state.get("title", ""),
+        audio_mode=state.get("audio_mode"),
+        rotation=state.get("rotation"),
+        fps_mode=desired_mode,
+    )
+    save_stream_state(state)
+    return load_stream_state()
+
+
+def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None):
     title = (title or "").strip() or _default_stream_title()
     rotation = normalize_rotation_mode(rotation)
+    fps_mode = normalize_fps_mode(fps_mode)
     LOGGER.info("YouTube stream creation request started: title=%s ap_ip=%s", title, ap_ip)
     LOGGER.info("Creating YouTube liveStream resource and waiting for API response")
     update_creation_state(status="creating", message="Creating stream target", progress_pct=20, stage="stream")
@@ -1087,6 +1236,7 @@ def create_stream_bundle(*, ap_ip="-", title=None, rotation=None):
         "ap_ip": ap_ip,
         "audio_mode": DEFAULT_PROXY_AUDIO_MODE if PROXY_ENABLED else "normal",
         "rotation": rotation,
+        "fps_mode": fps_mode,
         **publish,
     }
     _stop_proxy_relay()
@@ -1097,6 +1247,7 @@ def create_stream_bundle(*, ap_ip="-", title=None, rotation=None):
             stream_title=title,
             audio_mode=state.get("audio_mode"),
             rotation=state.get("rotation"),
+            fps_mode=state.get("fps_mode"),
         )
     save_stream_state(state)
     LOGGER.info(
@@ -1108,11 +1259,17 @@ def create_stream_bundle(*, ap_ip="-", title=None, rotation=None):
     return state
 
 
-def _run_creation_job(ap_ip, title, rotation):
+def _run_creation_job(ap_ip, title, rotation, fps_mode):
     try:
         update_creation_state(pid=os.getpid(), status="creating")
-        LOGGER.info("YouTube async creation job started: ap_ip=%s title=%s rotation=%s", ap_ip, title or "", rotation)
-        state = create_stream_bundle(ap_ip=ap_ip, title=title, rotation=rotation)
+        LOGGER.info(
+            "YouTube async creation job started: ap_ip=%s title=%s rotation=%s fps_mode=%s",
+            ap_ip,
+            title or "",
+            rotation,
+            fps_mode,
+        )
+        state = create_stream_bundle(ap_ip=ap_ip, title=title, rotation=rotation, fps_mode=fps_mode)
         save_creation_state(
             {
                 "status": "ready",
@@ -1145,7 +1302,7 @@ def _run_creation_job(ap_ip, title, rotation):
         raise
 
 
-def start_stream_creation(*, ap_ip="-", title=None, rotation=None):
+def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None):
     if creation_in_progress():
         LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
         raise YouTubeLiveError("Stream creation already in progress")
@@ -1155,12 +1312,13 @@ def start_stream_creation(*, ap_ip="-", title=None, rotation=None):
         LOGGER.warning("Rejected YouTube stream creation request because validation failed: %s", message)
         raise YouTubeLiveError(message)
     rotation = normalize_rotation_mode(rotation)
+    fps_mode = normalize_fps_mode(fps_mode)
     fd = _lock_creation()
     try:
         if creation_in_progress():
             LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
             raise YouTubeLiveError("Stream creation already in progress")
-        reset_creation_log(ap_ip=ap_ip, title=title or "", rotation=rotation)
+        reset_creation_log(ap_ip=ap_ip, title=title or "", rotation=rotation, fps_mode=fps_mode)
         save_creation_state(
             {
                 "status": "creating",
@@ -1171,15 +1329,24 @@ def start_stream_creation(*, ap_ip="-", title=None, rotation=None):
                 "ap_ip": ap_ip,
                 "title": title or "",
                 "rotation": rotation,
+                "fps_mode": fps_mode,
                 "log_path": str(CREATION_LOG_PATH),
             }
         )
-        LOGGER.info("Starting background YouTube stream creation process: ap_ip=%s title=%s rotation=%s", ap_ip, title or "", rotation)
+        LOGGER.info(
+            "Starting background YouTube stream creation process: ap_ip=%s title=%s rotation=%s fps_mode=%s",
+            ap_ip,
+            title or "",
+            rotation,
+            fps_mode,
+        )
         argv = [sys.executable, str(Path(__file__).resolve()), "create", "--ap-ip", ap_ip or "-"]
         if title:
             argv.extend(["--title", title])
         if rotation != "0":
             argv.extend(["--rotation", rotation])
+        if fps_mode != "original":
+            argv.extend(["--fps-mode", fps_mode])
         log_handle = CREATION_LOG_PATH.open("ab")
         try:
             proc = subprocess.Popen(
@@ -1216,6 +1383,7 @@ def _parse_cli_args(argv):
     ap_ip = "-"
     title = ""
     rotation = "0"
+    fps_mode = "original"
     idx = 0
     while idx < len(argv):
         item = argv[idx]
@@ -1231,12 +1399,16 @@ def _parse_cli_args(argv):
             rotation = argv[idx + 1]
             idx += 2
             continue
+        if item == "--fps-mode" and idx + 1 < len(argv):
+            fps_mode = argv[idx + 1]
+            idx += 2
+            continue
         idx += 1
-    return ap_ip, title, normalize_rotation_mode(rotation)
+    return ap_ip, title, normalize_rotation_mode(rotation), normalize_fps_mode(fps_mode)
 
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "create":
         logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s", force=True)
-        cli_ap_ip, cli_title, cli_rotation = _parse_cli_args(sys.argv[2:])
-        _run_creation_job(cli_ap_ip, cli_title, cli_rotation)
+        cli_ap_ip, cli_title, cli_rotation, cli_fps_mode = _parse_cli_args(sys.argv[2:])
+        _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode)

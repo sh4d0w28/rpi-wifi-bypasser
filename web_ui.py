@@ -10,11 +10,14 @@ from youtube_live import (
     YouTubeLiveError,
     get_auth_status,
     list_audio_modes,
+    list_fps_modes,
     list_rotation_modes,
     load_creation_log,
     load_creation_state,
     load_stream_state,
     set_proxy_audio_mode,
+    set_proxy_fps_mode,
+    set_proxy_rotation_mode,
     start_device_authorization,
     poll_device_authorization,
     start_stream_creation,
@@ -378,6 +381,7 @@ def index():
         youtube_creation_log=youtube_creation_log,
         youtube_stream=youtube_stream,
         youtube_audio_modes=list_audio_modes(),
+        youtube_fps_modes=list_fps_modes(),
         youtube_rotation_modes=list_rotation_modes(),
     )
 
@@ -459,6 +463,7 @@ def youtube_device_poll():
 def youtube_create():
     title = request.form.get("title", "").strip()
     rotation = request.form.get("rotation", "0").strip()
+    fps_mode = request.form.get("fps_mode", "original").strip()
     ap_ip = get_ip("wlan0").split("/", 1)[0]
     runtime = load_runtime_status()
     probe = runtime.get("probe", {}) if isinstance(runtime, dict) else {}
@@ -467,7 +472,7 @@ def youtube_create():
         flash("AUTH FIRST", "error")
         return redirect(url_for("index"))
     try:
-        start_stream_creation(ap_ip=ap_ip, title=title, rotation=rotation)
+        start_stream_creation(ap_ip=ap_ip, title=title, rotation=rotation, fps_mode=fps_mode)
         flash("YouTube stream creation started.", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
@@ -480,6 +485,34 @@ def youtube_audio_mode():
     try:
         state = set_proxy_audio_mode(mode)
         flash(f"YouTube relay audio mode: {state.get('audio_mode_label', 'Normal')}", "success")
+    except YouTubeLiveError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("index"))
+
+
+@APP.route("/youtube/rotation", methods=["POST"])
+def youtube_rotation_mode():
+    mode = request.form.get("mode", "").strip()
+    try:
+        state = set_proxy_rotation_mode(mode)
+        flash(
+            f"YouTube relay rotation: {state.get('rotation_label', 'Off')} (relay reconnects briefly).",
+            "success",
+        )
+    except YouTubeLiveError as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("index"))
+
+
+@APP.route("/youtube/fps-mode", methods=["POST"])
+def youtube_fps_mode():
+    mode = request.form.get("mode", "").strip()
+    try:
+        state = set_proxy_fps_mode(mode)
+        flash(
+            f"YouTube relay FPS: {state.get('fps_mode_label', 'Original')} (relay reconnects briefly).",
+            "success",
+        )
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
     return redirect(url_for("index"))

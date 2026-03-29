@@ -476,6 +476,16 @@
         {% endfor %}
       </select>
       <p class="help-text">Rotate 90 and Rotate -90 re-encode video in the proxy relay. Off keeps the current copy-video path.</p>
+      <label for="youtube-fps-mode">Frame rate</label>
+      <select id="youtube-fps-mode" name="fps_mode">
+        {% for item in youtube_fps_modes %}
+        <option
+          value="{{ item.value }}"
+          {% if (youtube_creation and youtube_creation.fps_mode == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.fps_mode == item.value) or ((not youtube_stream or not youtube_stream.fps_mode) and item.value == 'original') %}selected{% endif %}
+        >{{ item.label }}</option>
+        {% endfor %}
+      </select>
+      <p class="help-text">Original keeps the incoming frame rate. 30 and 20 FPS cap the relay output and can reduce CPU load when the relay is transcoding.</p>
       <button type="submit" {% if not youtube_ready or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
     </form>
 
@@ -493,8 +503,10 @@
       <p><strong>Relay listen:</strong> <span class="mono">{{ youtube_stream.proxy_listen_url }}</span></p>
       <p><strong>Audio mode:</strong> <span class="mono">{{ youtube_stream.audio_mode_label }}</span></p>
       <p><strong>Rotation:</strong> <span class="mono">{{ youtube_stream.rotation_label or 'Off' }}</span></p>
+      <p><strong>FPS:</strong> <span class="mono">{{ youtube_stream.fps_mode_label or 'Original' }}</span></p>
       <p class="help-text">{{ youtube_stream.audio_mode_description }}</p>
       <p class="help-text">{{ youtube_stream.rotation_description }}</p>
+      <p class="help-text">{{ youtube_stream.fps_mode_description }}</p>
       {% if youtube_stream.relay %}
       <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
       <p><strong>Video:</strong> <span class="mono">{% if youtube_stream.relay.video_width and youtube_stream.relay.video_height %}{{ youtube_stream.relay.video_width }}x{{ youtube_stream.relay.video_height }} ({{ youtube_stream.relay.video_orientation or 'unknown' }}){% else %}waiting for incoming stream{% endif %}</span></p>
@@ -512,7 +524,33 @@
           {% endfor %}
         </div>
       </form>
+      <form method="post" action="/youtube/rotation" class="stack-form">
+        <div class="button-row">
+          {% for item in youtube_rotation_modes %}
+          <button
+            type="submit"
+            name="mode"
+            value="{{ item.value }}"
+            class="secondary-button {{ 'mode-active' if youtube_stream.rotation == item.value else '' }}"
+          >{{ item.label }}</button>
+          {% endfor %}
+        </div>
+      </form>
+      <form method="post" action="/youtube/fps-mode" class="stack-form">
+        <div class="button-row">
+          {% for item in youtube_fps_modes %}
+          <button
+            type="submit"
+            name="mode"
+            value="{{ item.value }}"
+            class="secondary-button {{ 'mode-active' if youtube_stream.fps_mode == item.value else '' }}"
+          >{{ item.label }}</button>
+          {% endfor %}
+        </div>
+      </form>
       <p class="help-text">Voice Focus only biases the mix toward speech. It is not a true voices-only separator, and mode changes are applied live without restarting the relay.</p>
+      <p class="help-text">Rotation changes restart the proxy relay, so expect a brief reconnect when switching between Off, Rotate 90, and Rotate -90.</p>
+      <p class="help-text">FPS changes also restart the proxy relay. Use Original for passthrough, or 20 FPS as a lower-CPU option for walking/vlogging.</p>
       {% else %}
       <p><strong>RTMPS server:</strong> <span class="mono">{{ youtube_stream.rtmps_ingestion_address or youtube_stream.ingestion_address }}</span></p>
       <p><strong>Stream key:</strong> <span class="mono">{{ youtube_stream.stream_name }}</span></p>

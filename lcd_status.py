@@ -22,6 +22,8 @@ from youtube_live import (
     load_stream_state,
     poll_device_authorization,
     set_proxy_audio_mode,
+    set_proxy_fps_mode,
+    set_proxy_rotation_mode,
     start_device_authorization,
     start_stream_creation,
 )
@@ -80,17 +82,6 @@ PIN_KEY1 = 21
 PIN_KEY2 = 20
 PIN_KEY3 = 16
 FONT = ImageFont.load_default()
-NOKIA_BG = (198, 208, 186)
-NOKIA_BG_DARK = (164, 176, 151)
-NOKIA_PANEL = (214, 222, 203)
-NOKIA_PANEL_EDGE = (96, 110, 88)
-NOKIA_TEXT = (34, 48, 34)
-NOKIA_TEXT_DIM = (72, 86, 70)
-NOKIA_HILITE = (72, 102, 150)
-NOKIA_HILITE_DARK = (44, 64, 96)
-NOKIA_ALERT = (160, 70, 58)
-NOKIA_WARN = (168, 120, 48)
-NOKIA_OK = (56, 108, 60)
 CPU_SAMPLES = deque(maxlen=2)
 MATRIX_CHARS = "01アイウエオカキクケコサシスセソ"
 MATRIX_FONT_W = 6
@@ -291,41 +282,11 @@ def signal_color(signal):
     return (255, 96, 96)
 
 def draw_label_value(draw, x, y, label, value, value_fill="WHITE", gap=22):
-    draw.text((x, y), label, font=FONT, fill=NOKIA_TEXT_DIM)
+    draw.text((x, y), label, font=FONT, fill=(140, 170, 210))
     draw.text((x + gap, y), value, font=FONT, fill=value_fill)
 
 
-def draw_nokia_chrome(draw, title, *, right_text="", left_soft="Back", center_soft="", right_soft="Select"):
-    draw.rectangle((0, 0, 127, 127), fill=NOKIA_BG)
-    for y in range(128):
-        shade = int(8 * y / 127)
-        line_fill = (
-            max(0, NOKIA_BG[0] - shade),
-            max(0, NOKIA_BG[1] - shade),
-            max(0, NOKIA_BG[2] - shade),
-        )
-        draw.line((0, y, 127, y), fill=line_fill)
-    draw.rounded_rectangle((2, 2, 125, 18), radius=4, fill=NOKIA_HILITE, outline=NOKIA_HILITE_DARK)
-    draw.text((6, 6), fit_text(title.upper(), 12), font=FONT, fill=(235, 240, 236))
-    if right_text:
-        draw.text((77, 6), fit_text(right_text.upper(), 8), font=FONT, fill=(228, 234, 232))
-    draw.rounded_rectangle((3, 107, 124, 125), radius=4, fill=NOKIA_BG_DARK, outline=NOKIA_PANEL_EDGE)
-    draw.text((6, 113), fit_text(left_soft.upper(), 7), font=FONT, fill=NOKIA_TEXT)
-    if center_soft:
-        draw.text((46, 113), fit_text(center_soft.upper(), 7), font=FONT, fill=NOKIA_TEXT)
-    if right_soft:
-        draw.text((84, 113), fit_text(right_soft.upper(), 7), font=FONT, fill=NOKIA_TEXT)
-
-
-def draw_nokia_panel(draw, box, *, title=None):
-    draw.rounded_rectangle(box, radius=7, fill=NOKIA_PANEL, outline=NOKIA_PANEL_EDGE)
-    if title:
-        x1, y1, x2, _ = box
-        draw.rounded_rectangle((x1 + 2, y1 + 2, x2 - 2, y1 + 14), radius=5, fill=NOKIA_BG_DARK, outline=NOKIA_PANEL_EDGE)
-        draw.text((x1 + 6, y1 + 5), fit_text(title.upper(), 16), font=FONT, fill=NOKIA_TEXT)
-
-
-def draw_hourglass(draw, center_x, center_y, *, fill=NOKIA_TEXT):
+def draw_hourglass(draw, center_x, center_y, *, fill=(240, 244, 255)):
     top = [(center_x - 10, center_y - 12), (center_x + 10, center_y - 12), (center_x, center_y - 1)]
     bottom = [(center_x - 10, center_y + 12), (center_x + 10, center_y + 12), (center_x, center_y + 1)]
     draw.polygon(top, outline=fill)
@@ -348,11 +309,11 @@ def render_busy_overlay(draw, state):
     busy = state.get("busy_action") or {}
     if not busy:
         return
-    draw.rounded_rectangle((16, 31, 112, 96), radius=10, fill=(228, 234, 219), outline=NOKIA_PANEL_EDGE)
-    draw.rounded_rectangle((21, 36, 107, 91), radius=8, fill=NOKIA_PANEL, outline=NOKIA_BG_DARK)
-    draw_hourglass(draw, 64, 54, fill=NOKIA_TEXT)
-    draw.text((30, 72), "PLEASE WAIT", font=FONT, fill=NOKIA_TEXT)
-    draw.text((22, 83), fit_text(busy.get("label", "Working"), 14), font=FONT, fill=NOKIA_TEXT_DIM)
+    draw.rounded_rectangle((16, 31, 112, 96), radius=10, fill=(10, 16, 24), outline=(120, 220, 255))
+    draw.rounded_rectangle((21, 36, 107, 91), radius=8, fill=(18, 24, 36), outline=(64, 96, 128))
+    draw_hourglass(draw, 64, 54)
+    draw.text((30, 72), "PLEASE WAIT", font=FONT, fill=(240, 244, 255))
+    draw.text((22, 83), fit_text(busy.get("label", "Working"), 14), font=FONT, fill=(180, 180, 180))
 
 def read_button_states():
     states = {name: button_pressed(name, pin) for name, pin in BUTTON_PINS.items()}
@@ -1072,6 +1033,45 @@ def main():
                         "checked": youtube_stream.get("audio_mode") == mode,
                     }
                 )
+            items.append({"label": "Rotate", "kind": "noop", "disabled": True})
+            for mode, label in (
+                ("90", "Rotate 90"),
+                ("0", "Rotate Off"),
+                ("-90", "Rotate -90"),
+            ):
+                items.append(
+                    {
+                        "label": label,
+                        "kind": "action",
+                        "action": "youtube_rotation",
+                        "arg": mode,
+                        "checked": youtube_stream.get("rotation") == mode,
+                    }
+                )
+            items.append({"label": "FPS", "kind": "menu", "target": "ffmpeg_fps"})
+        else:
+            items.append({"label": "Needs proxy mode", "kind": "noop", "disabled": True})
+        return items
+
+    def build_ffmpeg_fps_menu():
+        items = [
+            {"label": "Frame Rate", "kind": "noop", "disabled": True},
+        ]
+        if youtube_stream.get("mode") == "proxy":
+            for mode, label in (
+                ("original", "Original"),
+                ("30", "30 FPS"),
+                ("20", "20 FPS"),
+            ):
+                items.append(
+                    {
+                        "label": label,
+                        "kind": "action",
+                        "action": "youtube_fps",
+                        "arg": mode,
+                        "checked": youtube_stream.get("fps_mode") == mode,
+                    }
+                )
         else:
             items.append({"label": "Needs proxy mode", "kind": "noop", "disabled": True})
         return items
@@ -1095,6 +1095,8 @@ def main():
             ]
         if menu_id == "ffmpeg":
             return "FFmpeg", build_ffmpeg_menu()
+        if menu_id == "ffmpeg_fps":
+            return "FPS", build_ffmpeg_fps_menu()
         if menu_id == "settings":
             return "Settings", build_settings_menu()
         return "Main", build_root_menu()
@@ -1228,6 +1230,40 @@ def main():
         finally:
             clear_busy()
 
+    def trigger_youtube_rotation(mode):
+        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode
+        show_busy("Rotation", screen="youtube", mode="screen")
+        try:
+            youtube_stream = set_proxy_rotation_mode(mode)
+            youtube_status_message = f"ROT {youtube_stream.get('rotation_short', mode)}"
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+            ui_mode = "screen"
+        except YouTubeLiveError as exc:
+            youtube_status_message = fit_text(str(exc), 20)
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+            ui_mode = "screen"
+        finally:
+            clear_busy()
+
+    def trigger_youtube_fps(mode):
+        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode
+        show_busy("FPS mode", screen="youtube", mode="screen")
+        try:
+            youtube_stream = set_proxy_fps_mode(mode)
+            youtube_status_message = youtube_stream.get("fps_mode_short", mode.upper())
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+            ui_mode = "screen"
+        except YouTubeLiveError as exc:
+            youtube_status_message = fit_text(str(exc), 20)
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+            ui_mode = "screen"
+        finally:
+            clear_busy()
+
     def trigger_portal_ack():
         nonlocal portal_ack_last, current_screen, ui_mode
         show_busy("Portal ack", screen="probe", mode="screen")
@@ -1291,6 +1327,10 @@ def main():
                 trigger_youtube_create()
             elif action == "youtube_audio":
                 trigger_youtube_audio(item.get("arg", "normal"))
+            elif action == "youtube_rotation":
+                trigger_youtube_rotation(item.get("arg", "0"))
+            elif action == "youtube_fps":
+                trigger_youtube_fps(item.get("arg", "original"))
             elif action == "update_run":
                 trigger_update_run()
             elif action == "portal_ack":
