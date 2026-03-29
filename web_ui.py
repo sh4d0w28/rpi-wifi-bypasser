@@ -462,6 +462,7 @@ def youtube_device_poll():
 @APP.route("/youtube/create", methods=["POST"])
 def youtube_create():
     title = request.form.get("title", "").strip()
+    audio_mode = request.form.get("audio_mode", "normal").strip()
     rotation = request.form.get("rotation", "0").strip()
     fps_mode = request.form.get("fps_mode", "original").strip()
     ap_ip = get_ip("wlan0").split("/", 1)[0]
@@ -472,7 +473,13 @@ def youtube_create():
         flash("AUTH FIRST", "error")
         return redirect(url_for("index"))
     try:
-        start_stream_creation(ap_ip=ap_ip, title=title, rotation=rotation, fps_mode=fps_mode)
+        start_stream_creation(
+            ap_ip=ap_ip,
+            title=title,
+            audio_mode=audio_mode,
+            rotation=rotation,
+            fps_mode=fps_mode,
+        )
         flash("YouTube stream creation started.", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")

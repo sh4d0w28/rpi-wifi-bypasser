@@ -623,18 +623,26 @@ def render_youtube(draw, image, state):
     draw.text((3, 20), fit_text(youtube.get("title", "No stream yet"), 20), font=FONT, fill=(240, 244, 255))
     draw.text((3, 33), fit_text(youtube.get("watch_url", "Use web UI"), 20), font=FONT, fill=(120, 220, 255))
     draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
-    draw.text((3, 56), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(240, 244, 255))
+    live_label = "LIVE" if youtube.get("mode") == "proxy" else "MODE"
+    live_value = (
+        f"A {youtube.get('audio_mode_short', 'NORM')} R {youtube.get('rotation_short', 'OFF')} F {youtube.get('fps_mode_short', 'ORIG')}"
+        if youtube.get("mode") == "proxy"
+        else fit_text(youtube.get("mode", "direct").upper(), 18)
+    )
+    next_value = (
+        f"A {youtube.get('create_audio_short', 'NORM')} R {youtube.get('create_rotation_short', 'OFF')} F {youtube.get('create_fps_short', 'ORIG')}"
+    )
+    draw.text((3, 54), fit_text(f"{live_label} {live_value}", 20), font=FONT, fill=(120, 220, 255))
+    draw.text((3, 67), fit_text(f"NEXT {next_value}", 20), font=FONT, fill=(255, 210, 90))
     if youtube["auth"].get("device_pending"):
         device = youtube["auth"].get("device") or {}
         code = device.get("user_code", "")
         verify = device.get("verification_url", "") or device.get("verification_url_complete", "")
-        draw.text((3, 72), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
-        draw.text((3, 85), fit_text(verify.replace("https://", ""), 20), font=FONT, fill=(120, 220, 255))
+        draw.text((3, 82), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
+        draw.text((3, 95), fit_text(verify.replace("https://", ""), 20), font=FONT, fill=(120, 220, 255))
         draw.text((3, 101), "PRESS=CHECK LEFT=BK", font=FONT, fill=(180, 180, 180))
         return
-    elif youtube.get("mode") == "proxy":
-        draw.text((3, 72), fit_text(f"AUD {youtube.get('audio_mode_label', 'Normal')}", 20), font=FONT, fill=(120, 220, 255))
-    draw.text((3, 88), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(180, 180, 180))
+    draw.text((3, 82), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(240, 244, 255))
     if not youtube["auth"].get("authorized"):
         draw.text((12, 101), "PRESS=AUTH LEFT=BK", font=FONT, fill=(180, 180, 180))
     else:
@@ -784,6 +792,43 @@ def render_menu(draw, state):
         draw.text((3, 106), message, font=FONT, fill=(255, 210, 90))
     draw.text((18, 119), "P OK L BK", font=FONT, fill=(120, 180, 120))
 
+
+def render_selector_popup(draw, state):
+    selector = state.get("modal_selector") or {}
+    items = selector.get("items") or []
+    if not items:
+        return
+
+    draw.rectangle((8, 20, 119, 107), fill=(6, 20, 6), outline=(90, 180, 90))
+    draw.rectangle((12, 24, 115, 43), fill=(0, 24, 0), outline=(36, 96, 36))
+    draw.text((16, 30), fit_text(selector.get("title", "Select").upper(), 14), font=FONT, fill=(180, 255, 180))
+
+    selected = max(0, min(selector.get("selected", 0), len(items) - 1))
+    visible_rows = 4
+    top_index = 0
+    if len(items) > visible_rows:
+        top_index = max(0, min(selected - 1, len(items) - visible_rows))
+
+    for row in range(visible_rows):
+        idx = top_index + row
+        if idx >= len(items):
+            break
+        item = items[idx]
+        y = 49 + (row * 12)
+        is_selected = idx == selected
+        fill = (240, 255, 240) if not item.get("disabled") else (150, 150, 150)
+        if is_selected:
+            draw.rectangle((14, y - 1, 113, y + 10), fill=(32, 72, 32), outline=(120, 200, 120))
+        label = item.get("label", "-")
+        if item.get("checked"):
+            label = f"{label} *"
+        draw.text((18, y), fit_text(label, 16), font=FONT, fill=fill)
+
+    value_text = fit_text(selector.get("value_text", ""), 16)
+    if value_text:
+        draw.text((18, 100), value_text, font=FONT, fill=(255, 210, 90))
+    draw.text((20, 112), "P OK  L BK", font=FONT, fill=(120, 180, 120))
+
 def render_screen(lcd, state):
     image = Image.new("RGB", (128, 128), "BLACK")
     draw = ImageDraw.Draw(image)
@@ -791,7 +836,15 @@ def render_screen(lcd, state):
     if state.get("ui_mode") == "home":
         render_home(draw, state)
     elif state.get("ui_mode") == "menu":
-        render_menu(draw, state)
+        if state.get("modal_selector"):
+            background_state = dict(state)
+            background_state["menu_title"] = state.get("menu_base_title", state.get("menu_title"))
+            background_state["menu_items"] = state.get("menu_base_items", state.get("menu_items"))
+            background_state["menu_selected"] = state.get("menu_base_selected", state.get("menu_selected", 0))
+            render_menu(draw, background_state)
+            render_selector_popup(draw, state)
+        else:
+            render_menu(draw, state)
     elif state["screen_id"] == "matrix":
         render_matrix(draw, state)
     elif state["screen_id"] == "game_pong":
@@ -874,6 +927,9 @@ def main():
     youtube_creation = load_creation_state()
     youtube_stream = load_stream_state()
     youtube_status_message = "Use YT menu"
+    youtube_create_audio_mode = youtube_creation.get("audio_mode") or youtube_stream.get("audio_mode", "normal")
+    youtube_create_rotation = youtube_creation.get("rotation") or youtube_stream.get("rotation", "0")
+    youtube_create_fps_mode = youtube_creation.get("fps_mode") or youtube_stream.get("fps_mode", "original")
     menu_stack = [{"id": "root", "selected": 0}]
     current_screen = None
     ui_mode = "home"
@@ -904,8 +960,56 @@ def main():
         nonlocal ui_message
         ui_message = fit_text(message or "", 20)
 
+    def selector_menu_ids():
+        return {
+            "youtube_create_audio",
+            "youtube_create_rotation",
+            "youtube_create_fps",
+            "youtube_manage_audio",
+            "youtube_manage_rotation",
+            "youtube_manage_fps",
+        }
+
+    def menu_definition_for(menu_id, selected=0):
+        title, items = get_menu_definition(menu_id)
+        if not items:
+            items = [{"label": "Empty", "kind": "noop", "disabled": True}]
+        selected = max(0, min(selected, len(items) - 1))
+        return title, items, selected
+
+    def default_selected_for_menu(menu_id):
+        _, items, _ = menu_definition_for(menu_id, 0)
+        for idx, item in enumerate(items):
+            if item.get("checked"):
+                return idx
+        return 0
+
+    def selector_value_text(menu_id):
+        if menu_id.startswith("youtube_create_"):
+            return "NEXT STREAM"
+        if menu_id.startswith("youtube_manage_"):
+            return "LIVE STREAM"
+        return fit_text(ui_message or "", 16)
+
     def compose_state(now):
         menu_title, menu_items = current_menu_definition()
+        menu_selected = current_menu_entry()["selected"]
+        modal_selector = None
+        menu_base_title = menu_title
+        menu_base_items = menu_items
+        menu_base_selected = menu_selected
+        if ui_mode == "menu" and current_menu_entry()["id"] in selector_menu_ids() and len(menu_stack) > 1:
+            parent_entry = menu_stack[-2]
+            menu_base_title, menu_base_items, menu_base_selected = menu_definition_for(
+                parent_entry["id"],
+                parent_entry.get("selected", 0),
+            )
+            modal_selector = {
+                "title": menu_title,
+                "items": menu_items,
+                "selected": menu_selected,
+                "value_text": selector_value_text(current_menu_entry()["id"]),
+            }
         return {
             "ui_mode": ui_mode,
             "screen_id": current_screen,
@@ -919,7 +1023,11 @@ def main():
             }.get(current_screen, "Menu"),
             "menu_title": menu_title,
             "menu_items": menu_items,
-            "menu_selected": current_menu_entry()["selected"],
+            "menu_selected": menu_selected,
+            "menu_base_title": menu_base_title,
+            "menu_base_items": menu_base_items,
+            "menu_base_selected": menu_base_selected,
+            "modal_selector": modal_selector,
             "menu_message": ui_message,
             "busy_action": busy_action,
             "ap_name": ap_name,
@@ -946,8 +1054,15 @@ def main():
                 "audio_mode": youtube_stream.get("audio_mode", "normal"),
                 "audio_mode_label": youtube_stream.get("audio_mode_label", "Normal"),
                 "audio_mode_short": youtube_stream.get("audio_mode_short", "NORM"),
+                "rotation": youtube_stream.get("rotation", "0"),
+                "rotation_short": youtube_stream.get("rotation_short", "OFF"),
+                "fps_mode": youtube_stream.get("fps_mode", "original"),
+                "fps_mode_short": youtube_stream.get("fps_mode_short", "ORIG"),
                 "relay": youtube_stream.get("relay", {}),
                 "creation": youtube_creation,
+                "create_audio_short": {"normal": "NORM", "voice": "VOICE", "mute": "MUTE"}.get(youtube_create_audio_mode, youtube_create_audio_mode.upper()),
+                "create_rotation_short": {"0": "OFF", "90": "+90", "-90": "-90"}.get(youtube_create_rotation, youtube_create_rotation),
+                "create_fps_short": {"original": "ORIG", "30": "30FPS", "20": "20FPS"}.get(youtube_create_fps_mode, youtube_create_fps_mode.upper()),
                 "status_message": youtube_status_message if youtube_auth.get("device_pending") else "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
                 "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),
             },
@@ -992,7 +1107,6 @@ def main():
             {"label": "YouTube", "kind": "menu", "target": "youtube"},
             {"label": "Matrix", "kind": "screen", "target": "matrix"},
             {"label": "Games", "kind": "menu", "target": "games"},
-            {"label": "FFmpeg", "kind": "menu", "target": "ffmpeg"},
             {"label": "Update", "kind": "action", "action": "update_run"},
             {"label": "Settings", "kind": "menu", "target": "settings"},
         ]
@@ -1020,81 +1134,140 @@ def main():
             "game_over": False,
         }
 
+    def youtube_stream_exists():
+        return bool(
+            youtube_stream.get("broadcast_id")
+            or youtube_stream.get("watch_url")
+            or youtube_stream.get("title")
+            or youtube_stream.get("proxy_publish_url")
+        )
+
+    def youtube_proxy_manageable():
+        return youtube_stream_exists() and youtube_stream.get("mode") == "proxy"
+
     def build_youtube_menu():
         items = [
             {"label": "Dashboard", "kind": "screen", "target": "youtube"},
         ]
         if youtube_auth.get("device_pending"):
             items.append({"label": "Check Auth", "kind": "action", "action": "youtube_auth_poll"})
+        elif youtube_auth.get("authorized") and not probe_cache.get("auth_required"):
+            items.append({"label": "Auth OK", "kind": "noop", "disabled": True})
         else:
             items.append({"label": "Start Auth", "kind": "action", "action": "youtube_auth_start"})
         if (youtube_creation or {}).get("status") == "creating":
+            items.append({"label": "Creating...", "kind": "noop", "disabled": True})
+        elif youtube_auth.get("authorized") and not probe_cache.get("auth_required"):
+            items.append({"label": "Create Stream", "kind": "menu", "target": "youtube_create"})
+        else:
+            items.append({"label": "Create Stream", "kind": "noop", "disabled": True})
+        if youtube_proxy_manageable():
+            items.append({"label": "Manage Stream", "kind": "menu", "target": "youtube_manage"})
+        elif youtube_stream_exists():
+            items.append({"label": "Manage Stream", "kind": "noop", "disabled": True})
+        return items
+
+    def build_youtube_create_menu():
+        audio_label = {"normal": "NORM", "voice": "VOICE", "mute": "MUTE"}.get(youtube_create_audio_mode, youtube_create_audio_mode.upper())
+        rotation_label = {"0": "OFF", "90": "+90", "-90": "-90"}.get(youtube_create_rotation, youtube_create_rotation)
+        fps_label = {"original": "ORIG", "30": "30FPS", "20": "20FPS"}.get(youtube_create_fps_mode, youtube_create_fps_mode.upper())
+        items = [
+            {"label": f"Audio {audio_label}", "kind": "menu", "target": "youtube_create_audio"},
+            {"label": f"Rotate {rotation_label}", "kind": "menu", "target": "youtube_create_rotation"},
+            {"label": f"FPS {fps_label}", "kind": "menu", "target": "youtube_create_fps"},
+        ]
+        if (youtube_creation or {}).get("status") == "creating":
             items.append({"label": "Create Stream", "kind": "noop", "disabled": True})
         else:
-            items.append({"label": "Create Stream", "kind": "action", "action": "youtube_create"})
+            items.append({"label": "Start Create", "kind": "action", "action": "youtube_create"})
         return items
 
-    def build_ffmpeg_menu():
-        items = [
-            {"label": "Mode", "kind": "noop", "disabled": True},
+    def build_youtube_manage_menu():
+        if not youtube_proxy_manageable():
+            return [{"label": "No proxy stream", "kind": "noop", "disabled": True}]
+        return [
+            {"label": f"Audio {youtube_stream.get('audio_mode_short', 'NORM')}", "kind": "menu", "target": "youtube_manage_audio"},
+            {"label": f"Rotate {youtube_stream.get('rotation_short', 'OFF')}", "kind": "menu", "target": "youtube_manage_rotation"},
+            {"label": f"FPS {youtube_stream.get('fps_mode_short', 'ORIG')}", "kind": "menu", "target": "youtube_manage_fps"},
         ]
-        if youtube_stream.get("mode") == "proxy":
-            for mode, label in (
-                ("normal", "Audio Normal"),
-                ("voice", "Audio Voice"),
-                ("mute", "Audio Mute"),
-            ):
-                items.append(
-                    {
-                        "label": label,
-                        "kind": "action",
-                        "action": "youtube_audio",
-                        "arg": mode,
-                        "checked": youtube_stream.get("audio_mode") == mode,
-                    }
-                )
-            items.append({"label": "Rotate", "kind": "noop", "disabled": True})
-            for mode, label in (
-                ("90", "Rotate 90"),
-                ("0", "Rotate Off"),
-                ("-90", "Rotate -90"),
-            ):
-                items.append(
-                    {
-                        "label": label,
-                        "kind": "action",
-                        "action": "youtube_rotation",
-                        "arg": mode,
-                        "checked": youtube_stream.get("rotation") == mode,
-                    }
-                )
-            items.append({"label": "FPS", "kind": "menu", "target": "ffmpeg_fps"})
-        else:
-            items.append({"label": "Needs proxy mode", "kind": "noop", "disabled": True})
-        return items
 
-    def build_ffmpeg_fps_menu():
-        items = [
-            {"label": "Frame Rate", "kind": "noop", "disabled": True},
+    def build_youtube_create_audio_menu():
+        return [
+            {
+                "label": label,
+                "kind": "action",
+                "action": "youtube_create_audio",
+                "arg": mode,
+                "checked": youtube_create_audio_mode == mode,
+            }
+            for mode, label in (("normal", "Audio Normal"), ("voice", "Audio Voice"), ("mute", "Audio Mute"))
         ]
-        if youtube_stream.get("mode") == "proxy":
-            for mode, label in (
-                ("original", "Original"),
-                ("30", "30 FPS"),
-                ("20", "20 FPS"),
-            ):
-                items.append(
-                    {
-                        "label": label,
-                        "kind": "action",
-                        "action": "youtube_fps",
-                        "arg": mode,
-                        "checked": youtube_stream.get("fps_mode") == mode,
-                    }
-                )
-        else:
-            items.append({"label": "Needs proxy mode", "kind": "noop", "disabled": True})
-        return items
+
+    def build_youtube_create_rotation_menu():
+        return [
+            {
+                "label": label,
+                "kind": "action",
+                "action": "youtube_create_rotation",
+                "arg": mode,
+                "checked": youtube_create_rotation == mode,
+            }
+            for mode, label in (("90", "Rotate 90"), ("0", "Rotate Off"), ("-90", "Rotate -90"))
+        ]
+
+    def build_youtube_create_fps_menu():
+        return [
+            {
+                "label": label,
+                "kind": "action",
+                "action": "youtube_create_fps",
+                "arg": mode,
+                "checked": youtube_create_fps_mode == mode,
+            }
+            for mode, label in (("original", "Original"), ("30", "30 FPS"), ("20", "20 FPS"))
+        ]
+
+    def build_youtube_manage_audio_menu():
+        if not youtube_proxy_manageable():
+            return [{"label": "No proxy stream", "kind": "noop", "disabled": True}]
+        return [
+            {
+                "label": label,
+                "kind": "action",
+                "action": "youtube_audio",
+                "arg": mode,
+                "checked": youtube_stream.get("audio_mode") == mode,
+            }
+            for mode, label in (("normal", "Audio Normal"), ("voice", "Audio Voice"), ("mute", "Audio Mute"))
+        ]
+
+    def build_youtube_manage_rotation_menu():
+        if not youtube_proxy_manageable():
+            return [{"label": "No proxy stream", "kind": "noop", "disabled": True}]
+        return [
+            {
+                "label": label,
+                "kind": "action",
+                "action": "youtube_rotation",
+                "arg": mode,
+                "checked": youtube_stream.get("rotation") == mode,
+            }
+            for mode, label in (("90", "Rotate 90"), ("0", "Rotate Off"), ("-90", "Rotate -90"))
+        ]
+
+    def build_youtube_manage_fps_menu():
+        if not youtube_proxy_manageable():
+            return [{"label": "No proxy stream", "kind": "noop", "disabled": True}]
+        return [
+            {
+                "label": label,
+                "kind": "action",
+                "action": "youtube_fps",
+                "arg": mode,
+                "checked": youtube_stream.get("fps_mode") == mode,
+            }
+            for mode, label in (("original", "Original"), ("30", "30 FPS"), ("20", "20 FPS"))
+        ]
 
     def build_settings_menu():
         items = [
@@ -1108,15 +1281,27 @@ def main():
     def get_menu_definition(menu_id):
         if menu_id == "youtube":
             return "YouTube", build_youtube_menu()
+        if menu_id == "youtube_create":
+            return "Create", build_youtube_create_menu()
+        if menu_id == "youtube_create_audio":
+            return "Create Audio", build_youtube_create_audio_menu()
+        if menu_id == "youtube_create_rotation":
+            return "Create Rotate", build_youtube_create_rotation_menu()
+        if menu_id == "youtube_create_fps":
+            return "Create FPS", build_youtube_create_fps_menu()
+        if menu_id == "youtube_manage":
+            return "Manage", build_youtube_manage_menu()
+        if menu_id == "youtube_manage_audio":
+            return "Live Audio", build_youtube_manage_audio_menu()
+        if menu_id == "youtube_manage_rotation":
+            return "Live Rotate", build_youtube_manage_rotation_menu()
+        if menu_id == "youtube_manage_fps":
+            return "Live FPS", build_youtube_manage_fps_menu()
         if menu_id == "games":
             return "Games", [
                 {"label": "Pong", "kind": "screen", "target": "game_pong"},
                 {"label": "Catch", "kind": "screen", "target": "game_catch"},
             ]
-        if menu_id == "ffmpeg":
-            return "FFmpeg", build_ffmpeg_menu()
-        if menu_id == "ffmpeg_fps":
-            return "FPS", build_ffmpeg_fps_menu()
         if menu_id == "settings":
             return "Settings", build_settings_menu()
         return "Main", build_root_menu()
@@ -1133,7 +1318,7 @@ def main():
 
     def youtube_active():
         menu_id = current_menu_entry()["id"] if menu_stack else "root"
-        return current_screen == "youtube" or menu_id in ("youtube", "ffmpeg")
+        return current_screen == "youtube" or menu_id.startswith("youtube")
 
     def probe_active():
         menu_id = current_menu_entry()["id"] if menu_stack else "root"
@@ -1172,6 +1357,31 @@ def main():
         current_screen = None
         ui_mode = "menu"
 
+    def open_menu_target(menu_id):
+        menu_stack.append({"id": menu_id, "selected": default_selected_for_menu(menu_id)})
+
+    def close_submenu():
+        if len(menu_stack) > 1:
+            menu_stack.pop()
+
+    def trigger_youtube_create_settings_audio(mode):
+        nonlocal youtube_create_audio_mode
+        youtube_create_audio_mode = mode
+        set_ui_message(f"Create {mode.upper()}")
+        close_submenu()
+
+    def trigger_youtube_create_settings_rotation(mode):
+        nonlocal youtube_create_rotation
+        youtube_create_rotation = mode
+        set_ui_message(f"Create rot {mode}")
+        close_submenu()
+
+    def trigger_youtube_create_settings_fps(mode):
+        nonlocal youtube_create_fps_mode
+        youtube_create_fps_mode = mode
+        set_ui_message(f"Create {mode.upper()}")
+        close_submenu()
+
     def trigger_youtube_create():
         nonlocal youtube_creation, youtube_status_message, current_screen, ui_mode
         if probe_cache.get("auth_required") or not youtube_auth.get("authorized"):
@@ -1182,7 +1392,12 @@ def main():
             return
         show_busy("Create stream", screen="youtube", mode="screen")
         try:
-            start_stream_creation(ap_ip=w0)
+            start_stream_creation(
+                ap_ip=w0,
+                audio_mode=youtube_create_audio_mode,
+                rotation=youtube_create_rotation,
+                fps_mode=youtube_create_fps_mode,
+            )
             youtube_creation = load_creation_state()
             youtube_status_message = "Stream is creating"
             set_ui_message(youtube_status_message)
@@ -1234,10 +1449,11 @@ def main():
             clear_busy()
 
     def trigger_youtube_audio(mode):
-        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode
+        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode, youtube_create_audio_mode
         show_busy("Audio mode", screen="youtube", mode="screen")
         try:
             youtube_stream = set_proxy_audio_mode(mode)
+            youtube_create_audio_mode = youtube_stream.get("audio_mode", mode)
             youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', mode.upper())}"
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
@@ -1251,10 +1467,11 @@ def main():
             clear_busy()
 
     def trigger_youtube_rotation(mode):
-        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode
+        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode, youtube_create_rotation
         show_busy("Rotation", screen="youtube", mode="screen")
         try:
             youtube_stream = set_proxy_rotation_mode(mode)
+            youtube_create_rotation = youtube_stream.get("rotation", mode)
             youtube_status_message = f"ROT {youtube_stream.get('rotation_short', mode)}"
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
@@ -1268,10 +1485,11 @@ def main():
             clear_busy()
 
     def trigger_youtube_fps(mode):
-        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode
+        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode, youtube_create_fps_mode
         show_busy("FPS mode", screen="youtube", mode="screen")
         try:
             youtube_stream = set_proxy_fps_mode(mode)
+            youtube_create_fps_mode = youtube_stream.get("fps_mode", mode)
             youtube_status_message = youtube_stream.get("fps_mode_short", mode.upper())
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
@@ -1334,7 +1552,7 @@ def main():
                 catch_game = reset_catch()
             ui_mode = "screen"
         elif kind == "menu":
-            menu_stack.append({"id": item.get("target", "root"), "selected": 0})
+            open_menu_target(item.get("target", "root"))
             current_screen = None
             ui_mode = "menu"
         elif kind == "action":
@@ -1345,6 +1563,12 @@ def main():
                 trigger_youtube_auth_poll()
             elif action == "youtube_create":
                 trigger_youtube_create()
+            elif action == "youtube_create_audio":
+                trigger_youtube_create_settings_audio(item.get("arg", "normal"))
+            elif action == "youtube_create_rotation":
+                trigger_youtube_create_settings_rotation(item.get("arg", "0"))
+            elif action == "youtube_create_fps":
+                trigger_youtube_create_settings_fps(item.get("arg", "original"))
             elif action == "youtube_audio":
                 trigger_youtube_audio(item.get("arg", "normal"))
             elif action == "youtube_rotation":

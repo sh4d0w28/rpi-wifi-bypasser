@@ -393,12 +393,13 @@ def update_creation_state(**fields):
     save_creation_state(state)
 
 
-def reset_creation_log(*, ap_ip="-", title="", rotation="0", fps_mode="original"):
+def reset_creation_log(*, ap_ip="-", title="", rotation="0", fps_mode="original", audio_mode="normal"):
     CREATION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     header = [
         f"[{datetime.now(timezone.utc).isoformat()}] stream creation requested",
         f"ap_ip={ap_ip or '-'}",
         f"title={title or '-'}",
+        f"audio_mode={normalize_audio_mode(audio_mode)}",
         f"rotation={normalize_rotation_mode(rotation)}",
         f"fps_mode={normalize_fps_mode(fps_mode)}",
         "",
@@ -1158,8 +1159,9 @@ def set_proxy_fps_mode(mode):
     return load_stream_state()
 
 
-def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None):
+def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
     title = (title or "").strip() or _default_stream_title()
+    audio_mode = normalize_audio_mode(audio_mode)
     rotation = normalize_rotation_mode(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
     LOGGER.info("YouTube stream creation request started: title=%s ap_ip=%s", title, ap_ip)
@@ -1234,7 +1236,7 @@ def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None)
         "rtmps_ingestion_address": ingestion_info.get("rtmpsIngestionAddress", ""),
         "privacy_status": STREAM_PRIVACY_STATUS,
         "ap_ip": ap_ip,
-        "audio_mode": DEFAULT_PROXY_AUDIO_MODE if PROXY_ENABLED else "normal",
+        "audio_mode": audio_mode if PROXY_ENABLED else "normal",
         "rotation": rotation,
         "fps_mode": fps_mode,
         **publish,
@@ -1259,17 +1261,24 @@ def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None)
     return state
 
 
-def _run_creation_job(ap_ip, title, rotation, fps_mode):
+def _run_creation_job(ap_ip, title, rotation, fps_mode, audio_mode):
     try:
         update_creation_state(pid=os.getpid(), status="creating")
         LOGGER.info(
-            "YouTube async creation job started: ap_ip=%s title=%s rotation=%s fps_mode=%s",
+            "YouTube async creation job started: ap_ip=%s title=%s audio_mode=%s rotation=%s fps_mode=%s",
             ap_ip,
             title or "",
+            audio_mode,
             rotation,
             fps_mode,
         )
-        state = create_stream_bundle(ap_ip=ap_ip, title=title, rotation=rotation, fps_mode=fps_mode)
+        state = create_stream_bundle(
+            ap_ip=ap_ip,
+            title=title,
+            rotation=rotation,
+            fps_mode=fps_mode,
+            audio_mode=audio_mode,
+        )
         save_creation_state(
             {
                 "status": "ready",
@@ -1302,7 +1311,7 @@ def _run_creation_job(ap_ip, title, rotation, fps_mode):
         raise
 
 
-def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None):
+def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
     if creation_in_progress():
         LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
         raise YouTubeLiveError("Stream creation already in progress")
@@ -1311,6 +1320,7 @@ def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None
         message = validation.get("message") or "YouTube Live validation failed"
         LOGGER.warning("Rejected YouTube stream creation request because validation failed: %s", message)
         raise YouTubeLiveError(message)
+    audio_mode = normalize_audio_mode(audio_mode)
     rotation = normalize_rotation_mode(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
     fd = _lock_creation()
@@ -1318,7 +1328,13 @@ def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None
         if creation_in_progress():
             LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
             raise YouTubeLiveError("Stream creation already in progress")
-        reset_creation_log(ap_ip=ap_ip, title=title or "", rotation=rotation, fps_mode=fps_mode)
+        reset_creation_log(
+            ap_ip=ap_ip,
+            title=title or "",
+            rotation=rotation,
+            fps_mode=fps_mode,
+            audio_mode=audio_mode,
+        )
         save_creation_state(
             {
                 "status": "creating",
@@ -1328,21 +1344,25 @@ def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None
                 "started_at": time.time(),
                 "ap_ip": ap_ip,
                 "title": title or "",
+                "audio_mode": audio_mode,
                 "rotation": rotation,
                 "fps_mode": fps_mode,
                 "log_path": str(CREATION_LOG_PATH),
             }
         )
         LOGGER.info(
-            "Starting background YouTube stream creation process: ap_ip=%s title=%s rotation=%s fps_mode=%s",
+            "Starting background YouTube stream creation process: ap_ip=%s title=%s audio_mode=%s rotation=%s fps_mode=%s",
             ap_ip,
             title or "",
+            audio_mode,
             rotation,
             fps_mode,
         )
         argv = [sys.executable, str(Path(__file__).resolve()), "create", "--ap-ip", ap_ip or "-"]
         if title:
             argv.extend(["--title", title])
+        if audio_mode != DEFAULT_PROXY_AUDIO_MODE:
+            argv.extend(["--audio-mode", audio_mode])
         if rotation != "0":
             argv.extend(["--rotation", rotation])
         if fps_mode != "original":
@@ -1382,6 +1402,7 @@ def qr_data_uri(payload):
 def _parse_cli_args(argv):
     ap_ip = "-"
     title = ""
+    audio_mode = DEFAULT_PROXY_AUDIO_MODE
     rotation = "0"
     fps_mode = "original"
     idx = 0
@@ -1395,6 +1416,10 @@ def _parse_cli_args(argv):
             title = argv[idx + 1]
             idx += 2
             continue
+        if item == "--audio-mode" and idx + 1 < len(argv):
+            audio_mode = argv[idx + 1]
+            idx += 2
+            continue
         if item == "--rotation" and idx + 1 < len(argv):
             rotation = argv[idx + 1]
             idx += 2
@@ -1404,11 +1429,17 @@ def _parse_cli_args(argv):
             idx += 2
             continue
         idx += 1
-    return ap_ip, title, normalize_rotation_mode(rotation), normalize_fps_mode(fps_mode)
+    return (
+        ap_ip,
+        title,
+        normalize_audio_mode(audio_mode),
+        normalize_rotation_mode(rotation),
+        normalize_fps_mode(fps_mode),
+    )
 
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "create":
         logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s", force=True)
-        cli_ap_ip, cli_title, cli_rotation, cli_fps_mode = _parse_cli_args(sys.argv[2:])
-        _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode)
+        cli_ap_ip, cli_title, cli_audio_mode, cli_rotation, cli_fps_mode = _parse_cli_args(sys.argv[2:])
+        _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode, cli_audio_mode)
