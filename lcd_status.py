@@ -562,6 +562,8 @@ def build_qr_image(payload, size=116):
 
 def render_youtube(draw, image, state):
     youtube = state["youtube"]
+    auth = youtube.get("auth") or {}
+    device_pending = bool(auth.get("device_pending"))
     creating = (youtube.get("creation") or {}).get("status") == "creating"
     if creating:
         creation = youtube.get("creation") or {}
@@ -583,7 +585,7 @@ def render_youtube(draw, image, state):
         draw.text((22, 119), "LEFT BACK", font=FONT, fill=(180, 180, 180))
         return
 
-    if youtube.get("auth_required") and not youtube.get("qr_payload"):
+    if youtube.get("auth_required") and not device_pending and not youtube.get("qr_payload"):
         draw.rectangle((4, 22, 123, 104), outline=(255, 96, 96), width=2)
         draw.rectangle((8, 26, 119, 100), outline=(255, 96, 96), width=1)
         draw.text((22, 40), "AUTH", font=FONT, fill=(255, 230, 230))
@@ -606,25 +608,39 @@ def render_youtube(draw, image, state):
             return
 
     draw.text((3, 3), "YOUTUBE", font=FONT, fill=(140, 170, 210))
-    auth_text = "READY" if youtube["auth"].get("authorized") else "PENDING" if youtube["auth"].get("device_pending") else "SETUP"
+    auth_text = "READY" if auth.get("authorized") else "PENDING" if device_pending else "SETUP"
     auth_fill = (120, 255, 160) if auth_text == "READY" else (255, 210, 90) if auth_text == "PENDING" else (255, 96, 96)
     draw.text((72, 3), auth_text, font=FONT, fill=auth_fill)
     draw.text((3, 20), fit_text(youtube.get("title", "No stream yet"), 20), font=FONT, fill=(240, 244, 255))
     draw.text((3, 33), fit_text(youtube.get("watch_url", "Use web UI"), 20), font=FONT, fill=(120, 220, 255))
     draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
     draw.text((3, 56), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(240, 244, 255))
-    if youtube["auth"].get("device_pending"):
-        device = youtube["auth"].get("device") or {}
+    if device_pending:
+        device = auth.get("device") or {}
         code = device.get("user_code", "")
-        verify = device.get("verification_url", "") or device.get("verification_url_complete", "")
+        verify = device.get("verification_url_complete", "") or device.get("verification_url", "")
+        expires_at = float(device.get("expires_at", 0) or 0)
+        seconds_left = max(0, int(expires_at - time.time())) if expires_at else 0
+        expires_text = f"EXP {seconds_left // 60}M{seconds_left % 60:02d}" if seconds_left else "EXP SOON"
         draw.text((3, 72), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
         draw.text((3, 85), fit_text(verify.replace("https://", ""), 20), font=FONT, fill=(120, 220, 255))
-        draw.text((3, 101), "PRESS=CHECK LEFT=BK", font=FONT, fill=(180, 180, 180))
+        draw.text((3, 98), fit_text(expires_text, 20), font=FONT, fill=(200, 200, 200))
+        draw.text((3, 111), "PRESS CHECK LEFT BK", font=FONT, fill=(180, 180, 180))
         return
     elif youtube.get("mode") == "proxy":
         draw.text((3, 72), fit_text(f"AUD {youtube.get('audio_mode_label', 'Normal')}", 20), font=FONT, fill=(120, 220, 255))
+    relay = youtube.get("relay") or {}
+    if relay.get("video_width") and relay.get("video_height"):
+        video_text = f"{relay.get('video_width')}x{relay.get('video_height')} {str(relay.get('video_orientation', '')).upper()}".strip()
+        draw.text((3, 88), fit_text(video_text, 20), font=FONT, fill=(180, 220, 180))
+        draw.text((3, 101), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(180, 180, 180))
+        if not auth.get("authorized"):
+            draw.text((12, 114), "PRESS=AUTH LEFT=BK", font=FONT, fill=(180, 180, 180))
+        else:
+            draw.text((18, 114), "LEFT=BACK", font=FONT, fill=(180, 180, 180))
+        return
     draw.text((3, 88), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(180, 180, 180))
-    if not youtube["auth"].get("authorized"):
+    if not auth.get("authorized"):
         draw.text((12, 101), "PRESS=AUTH LEFT=BK", font=FONT, fill=(180, 180, 180))
     else:
         draw.text((18, 101), "LEFT=BACK", font=FONT, fill=(180, 180, 180))
@@ -1363,8 +1379,9 @@ def main():
                 "audio_mode": youtube_stream.get("audio_mode", "normal"),
                 "audio_mode_label": youtube_stream.get("audio_mode_label", "Normal"),
                 "audio_mode_short": youtube_stream.get("audio_mode_short", "NORM"),
+                "relay": youtube_stream.get("relay", {}),
                 "creation": youtube_creation,
-                "status_message": "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
+                "status_message": youtube_status_message if youtube_auth.get("device_pending") else "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
                 "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),
             },
             "matrix": {

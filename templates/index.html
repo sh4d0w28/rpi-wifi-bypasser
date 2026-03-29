@@ -148,6 +148,15 @@
       vertical-align: middle;
     }
     .inline-button:hover { background: var(--chip-hover); }
+    .inline-button-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 8px 0;
+    }
+    .inline-button-group .inline-button {
+      margin: 0;
+    }
     .code-copy {
       cursor: pointer;
       text-decoration: underline;
@@ -369,6 +378,7 @@
     <p>Missing YouTube OAuth client config. Set <span class="mono">YOUTUBE_CLIENT_CONFIG_PATH</span> or <span class="mono">YOUTUBE_CLIENT_ID</span>.</p>
     {% else %}
     <p><strong>Auth:</strong> <span class="mono">{{ 'ready' if youtube_auth.authorized else 'pending' if youtube_auth.device_pending else 'not authorized' }}</span></p>
+    <p><strong>Refresh token:</strong> <span class="mono">{{ 'present' if youtube_auth.token.has_refresh_token else 'missing' }}</span></p>
     {% if youtube_auth.authorized %}
     <p>
       <strong>Live access:</strong>
@@ -392,15 +402,21 @@
         <span id="youtube-device-code" class="mono code-copy" title="Click to copy">{{ youtube_auth.device.user_code }}</span>
         <button type="button" id="copy-device-code" class="inline-button">Copy</button>
       </p>
+      <p><strong>Expires at:</strong> <span id="youtube-device-expiry" class="mono" data-expires-at="{{ youtube_auth.device.expires_at or '' }}">-</span></p>
       <p>
         <strong>Open:</strong>
         <a
+          id="youtube-device-link"
           class="mono"
           href="{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}"
           target="_blank"
           rel="noreferrer"
         >{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}</a>
       </p>
+      <div class="inline-button-group">
+        <button type="button" id="copy-device-link" class="inline-button">Copy link</button>
+        <button type="button" id="copy-device-instructions" class="inline-button">Copy code + link</button>
+      </div>
       <p id="device-code-copy-status" class="help-text"></p>
       <p class="help-text">Authorize the Pi once, then return here and press "Check auth".</p>
       <form method="post" action="/youtube/device/poll" class="stack-form">
@@ -415,13 +431,20 @@
 
     <form method="post" action="/youtube/create" class="stack-form">
       <label>Stream title</label>
-      <input name="title" placeholder="Optional custom title">
+      <input id="youtube-title" name="title" placeholder="Optional custom title">
+      <div class="chips">
+        <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }}">Use AP name</button>
+        <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }} Live">AP + Live</button>
+        <button type="button" class="chip js-title-prefill" data-title="{{ active.name or ap_name }}">Use active uplink</button>
+        <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }} {{ wlan0_ip.split('/', 1)[0] if wlan0_ip and wlan0_ip != '-' else '' }}">AP + IP</button>
+      </div>
       <button type="submit" {% if not youtube_ready or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
     </form>
 
     {% if youtube_stream %}
     <div class="qr-card">
       <p><strong>Title:</strong> <span class="mono">{{ youtube_stream.title }}</span></p>
+      <p><strong>Privacy:</strong> <span class="mono">{{ youtube_stream.privacy_status or 'public' }}</span></p>
       <p><strong>Mode:</strong> <span class="mono">{{ youtube_stream.mode }}</span></p>
       {% if youtube_stream.watch_url %}
       <p><strong>Watch:</strong> <a href="{{ youtube_stream.watch_url }}" target="_blank" rel="noreferrer">{{ youtube_stream.watch_url }}</a></p>
@@ -434,6 +457,7 @@
       <p class="help-text">{{ youtube_stream.audio_mode_description }}</p>
       {% if youtube_stream.relay %}
       <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
+      <p><strong>Video:</strong> <span class="mono">{% if youtube_stream.relay.video_width and youtube_stream.relay.video_height %}{{ youtube_stream.relay.video_width }}x{{ youtube_stream.relay.video_height }} ({{ youtube_stream.relay.video_orientation or 'unknown' }}){% else %}waiting for incoming stream{% endif %}</span></p>
       <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
       {% endif %}
       <form method="post" action="/youtube/audio-mode" class="stack-form">
@@ -448,7 +472,7 @@
           {% endfor %}
         </div>
       </form>
-      <p class="help-text">Voice Focus only biases the mix toward speech. It is not a true voices-only separator, and changing modes restarts the relay.</p>
+      <p class="help-text">Voice Focus only biases the mix toward speech. It is not a true voices-only separator, and mode changes are applied live without restarting the relay.</p>
       {% else %}
       <p><strong>RTMPS server:</strong> <span class="mono">{{ youtube_stream.rtmps_ingestion_address or youtube_stream.ingestion_address }}</span></p>
       <p><strong>Stream key:</strong> <span class="mono">{{ youtube_stream.stream_name }}</span></p>
@@ -536,6 +560,10 @@ async function copyTextToClipboard(text) {
 
 const deviceCodeEl = document.getElementById("youtube-device-code");
 const copyDeviceCodeButton = document.getElementById("copy-device-code");
+const copyDeviceLinkButton = document.getElementById("copy-device-link");
+const copyDeviceInstructionsButton = document.getElementById("copy-device-instructions");
+const deviceLinkEl = document.getElementById("youtube-device-link");
+const deviceExpiryEl = document.getElementById("youtube-device-expiry");
 const deviceCodeCopyStatus = document.getElementById("device-code-copy-status");
 
 async function copyDeviceCode() {
@@ -564,6 +592,54 @@ if (deviceCodeEl) {
 if (copyDeviceCodeButton) {
   copyDeviceCodeButton.addEventListener("click", copyDeviceCode);
 }
+if (copyDeviceLinkButton && deviceLinkEl) {
+  copyDeviceLinkButton.addEventListener("click", async () => {
+    try {
+      await copyTextToClipboard(deviceLinkEl.href);
+      if (deviceCodeCopyStatus) {
+        deviceCodeCopyStatus.textContent = "Verification link copied.";
+      }
+    } catch (error) {
+      if (deviceCodeCopyStatus) {
+        deviceCodeCopyStatus.textContent = "Clipboard copy failed.";
+      }
+    }
+  });
+}
+if (copyDeviceInstructionsButton && deviceLinkEl && deviceCodeEl) {
+  copyDeviceInstructionsButton.addEventListener("click", async () => {
+    const payload = `Open ${deviceLinkEl.href} and enter code ${deviceCodeEl.textContent.trim()}.`;
+    try {
+      await copyTextToClipboard(payload);
+      if (deviceCodeCopyStatus) {
+        deviceCodeCopyStatus.textContent = "Code and link copied.";
+      }
+    } catch (error) {
+      if (deviceCodeCopyStatus) {
+        deviceCodeCopyStatus.textContent = "Clipboard copy failed.";
+      }
+    }
+  });
+}
+if (deviceExpiryEl && deviceExpiryEl.dataset.expiresAt) {
+  const expiresAt = Number(deviceExpiryEl.dataset.expiresAt);
+  if (Number.isFinite(expiresAt) && expiresAt > 0) {
+    const expiryDate = new Date(expiresAt * 1000);
+    const secondsLeft = Math.max(0, Math.round((expiresAt * 1000 - Date.now()) / 1000));
+    deviceExpiryEl.textContent = `${expiryDate.toLocaleString()} (${secondsLeft}s left)`;
+  }
+}
+
+document.querySelectorAll(".js-title-prefill").forEach((element) => {
+  element.addEventListener("click", () => {
+    const titleInput = document.getElementById("youtube-title");
+    if (!titleInput) {
+      return;
+    }
+    titleInput.value = (element.dataset.title || "").trim();
+    titleInput.focus();
+  });
+});
 
 document.querySelectorAll(".js-prefill").forEach((element) => {
   element.addEventListener("click", () => {

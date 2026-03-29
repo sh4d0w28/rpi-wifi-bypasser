@@ -434,7 +434,7 @@ def youtube_device_start():
     try:
         state = start_device_authorization()
         flash(
-            f"Open {state.get('verification_url') or state.get('verification_url_complete')}, then enter code {state.get('user_code')}.",
+            f"Open {state.get('verification_url_complete') or state.get('verification_url')}, then enter code {state.get('user_code')}.",
             "success",
         )
     except YouTubeLiveError as exc:

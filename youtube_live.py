@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 import base64
+import ctypes
+import ctypes.util
 import io
 import json
 import logging
 import os
 import signal
+import re
 import subprocess
 import sys
 import time
@@ -29,11 +32,12 @@ STREAM_CREATE_LOCK_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_LOCK_PATH",
 RELAY_STATE_PATH = Path(os.environ.get("YOUTUBE_RELAY_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_relay.json"))
 RELAY_LOG_PATH = Path(os.environ.get("YOUTUBE_RELAY_LOG_PATH", "/run/rpi_ap_tools_youtube_relay.log"))
 STREAM_TITLE_PREFIX = os.environ.get("YOUTUBE_STREAM_TITLE_PREFIX", "RPi Live").strip() or "RPi Live"
-STREAM_PRIVACY_STATUS = os.environ.get("YOUTUBE_STREAM_PRIVACY_STATUS", "unlisted").strip() or "unlisted"
+STREAM_PRIVACY_STATUS = os.environ.get("YOUTUBE_STREAM_PRIVACY_STATUS", "public").strip() or "public"
 PROXY_ENABLED = os.environ.get("YOUTUBE_PROXY_ENABLED", "1").strip().lower() not in ("0", "false", "no")
 PROXY_PUBLISH_URL_TEMPLATE = os.environ.get("YOUTUBE_PROXY_PUBLISH_URL", "").strip()
 PROXY_RTMP_PORT = int(os.environ.get("YOUTUBE_PROXY_RTMP_PORT", "7777") or "7777")
 PROXY_RTMP_APP = os.environ.get("YOUTUBE_PROXY_RTMP_APP", "live").strip().strip("/")
+PROXY_ZMQ_PORT = int(os.environ.get("YOUTUBE_PROXY_ZMQ_PORT", "5559") or "5559")
 FFMPEG_BIN = os.environ.get("YOUTUBE_PROXY_FFMPEG_BIN", "ffmpeg").strip() or "ffmpeg"
 DEFAULT_PROXY_AUDIO_MODE = os.environ.get("YOUTUBE_PROXY_AUDIO_MODE", "normal").strip().lower() or "normal"
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
@@ -44,7 +48,7 @@ AUDIO_MODE_SPECS = {
     "normal": {
         "label": "Normal",
         "short_label": "NORM",
-        "description": "Pass audio through unchanged.",
+        "description": "Natural audio mix with live-switchable processing.",
     },
     "voice": {
         "label": "Voice Focus",
@@ -59,6 +63,12 @@ AUDIO_MODE_SPECS = {
 }
 if DEFAULT_PROXY_AUDIO_MODE not in AUDIO_MODE_SPECS:
     DEFAULT_PROXY_AUDIO_MODE = "normal"
+
+VIDEO_DIMENSION_RE = re.compile(r'(\d{2,5})x(\d{2,5})(?:\s|\[|,|$)')
+ZMQ_REQ = 3
+ZMQ_LINGER = 17
+ZMQ_RCVTIMEO = 27
+ZMQ_SNDTIMEO = 28
 
 
 class YouTubeLiveError(RuntimeError):
@@ -284,6 +294,7 @@ def normalize_relay_state(state):
     if not isinstance(state, dict):
         return {}
     state = _decorate_audio_mode_fields(state, default_mode=DEFAULT_PROXY_AUDIO_MODE)
+    state = _populate_relay_video_fields(state)
     pid = state.get("pid")
     if not pid:
         return state
@@ -292,6 +303,62 @@ def normalize_relay_state(state):
         state["status"] = "stopped"
         state.setdefault("stopped_at", time.time())
     return state
+
+
+def _relay_orientation(width, height):
+    try:
+        width = int(width or 0)
+        height = int(height or 0)
+    except (TypeError, ValueError):
+        return ""
+    if width <= 0 or height <= 0:
+        return ""
+    if height > width:
+        return "portrait"
+    if width > height:
+        return "landscape"
+    return "square"
+
+
+def _extract_video_dimensions_from_log(log_path):
+    if not log_path:
+        return {}
+    try:
+        raw = Path(log_path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return {}
+    matches = VIDEO_DIMENSION_RE.findall(raw)
+    if not matches:
+        return {}
+    for width_text, height_text in reversed(matches):
+        width = int(width_text)
+        height = int(height_text)
+        if width < 32 or height < 32:
+            continue
+        return {
+            "video_width": width,
+            "video_height": height,
+            "video_orientation": _relay_orientation(width, height),
+            "video_detected_at": time.time(),
+        }
+    return {}
+
+
+def _populate_relay_video_fields(state):
+    if not isinstance(state, dict) or not state:
+        return state
+    width = state.get("video_width")
+    height = state.get("video_height")
+    if width and height:
+        payload = dict(state)
+        payload["video_orientation"] = _relay_orientation(width, height)
+        return payload
+    detected = _extract_video_dimensions_from_log(state.get("log_path", ""))
+    if not detected:
+        return state
+    payload = dict(state)
+    payload.update(detected)
+    return payload
 
 
 def _lock_creation():
@@ -519,8 +586,27 @@ def _proxy_listen_url():
     return f"rtmp://0.0.0.0:{PROXY_RTMP_PORT}"
 
 
+def _proxy_control_url():
+    return f"tcp://127.0.0.1:{PROXY_ZMQ_PORT}"
+
+
+def _ffmpeg_escape_filter_value(value):
+    return value.replace("\\", "\\\\").replace(":", "\\:")
+
+
+def _relay_audio_filter():
+    return ",".join(
+        [
+            "highpass@voice_hp=f=160:m=0",
+            "lowpass@voice_lp=f=3800:m=0",
+            "acompressor@voice_comp=threshold=0.08:ratio=3:attack=5:release=60:makeup=2:mix=0",
+            "volume@audio_gain=1:eval=once",
+            f"azmq@audio_ctrl=b='{_ffmpeg_escape_filter_value(_proxy_control_url())}'",
+        ]
+    )
+
+
 def _proxy_relay_argv(*, listen_url, target_url, audio_mode):
-    mode = normalize_audio_mode(audio_mode)
     argv = [
         FFMPEG_BIN,
         "-hide_banner",
@@ -530,38 +616,148 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode):
         "1",
         "-i",
         listen_url,
+        "-map",
+        "0:v?",
+        "-c:v",
+        "copy",
+        "-map",
+        "0:a?",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        "44100",
+        "-ac",
+        "1",
+        "-af",
+        _relay_audio_filter(),
     ]
-    if mode == "normal":
-        argv.extend(["-c", "copy"])
-    elif mode == "mute":
-        argv.extend([
-            "-map",
-            "0:v?",
-            "-c:v",
-            "copy",
-            "-an",
-        ])
-    else:
-        argv.extend([
-            "-map",
-            "0:v?",
-            "-c:v",
-            "copy",
-            "-map",
-            "0:a?",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-ar",
-            "44100",
-            "-ac",
-            "1",
-            "-af",
-            "highpass=f=160,lowpass=f=3800,acompressor=threshold=0.08:ratio=3:attack=5:release=60:makeup=2,volume=2",
-        ])
     argv.extend(["-f", "flv", target_url])
     return argv
+
+
+def _load_libzmq():
+    candidates = []
+    discovered = ctypes.util.find_library("zmq")
+    if discovered:
+        candidates.append(discovered)
+    candidates.extend(
+        [
+            "libzmq.so.5",
+            "libzmq.so",
+            "libzmq.dylib",
+            "libzmq.dll",
+            "zmq.dll",
+        ]
+    )
+    lib = None
+    for candidate in candidates:
+        try:
+            lib = ctypes.CDLL(candidate)
+            break
+        except OSError:
+            continue
+    if lib is None:
+        raise YouTubeLiveError("libzmq is not installed; live audio switching is unavailable")
+    lib.zmq_ctx_new.restype = ctypes.c_void_p
+    lib.zmq_ctx_term.argtypes = [ctypes.c_void_p]
+    lib.zmq_socket.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.zmq_socket.restype = ctypes.c_void_p
+    lib.zmq_setsockopt.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t]
+    lib.zmq_connect.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.zmq_send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    lib.zmq_send.restype = ctypes.c_int
+    lib.zmq_recv.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    lib.zmq_recv.restype = ctypes.c_int
+    lib.zmq_close.argtypes = [ctypes.c_void_p]
+    lib.zmq_errno.restype = ctypes.c_int
+    lib.zmq_strerror.argtypes = [ctypes.c_int]
+    lib.zmq_strerror.restype = ctypes.c_char_p
+    return lib
+
+
+def _zmq_error(lib):
+    code = lib.zmq_errno()
+    detail = lib.zmq_strerror(code)
+    return detail.decode("utf-8", errors="ignore") if detail else f"libzmq error {code}"
+
+
+def _zmq_send_command(endpoint, message):
+    lib = _load_libzmq()
+    ctx = lib.zmq_ctx_new()
+    if not ctx:
+        raise YouTubeLiveError("Failed to create ZMQ context")
+    sock = None
+    try:
+        sock = lib.zmq_socket(ctx, ZMQ_REQ)
+        if not sock:
+            raise YouTubeLiveError("Failed to create ZMQ socket")
+        linger = ctypes.c_int(0)
+        timeout_ms = ctypes.c_int(1500)
+        if lib.zmq_setsockopt(sock, ZMQ_LINGER, ctypes.byref(linger), ctypes.sizeof(linger)) != 0:
+            raise YouTubeLiveError(_zmq_error(lib))
+        if lib.zmq_setsockopt(sock, ZMQ_SNDTIMEO, ctypes.byref(timeout_ms), ctypes.sizeof(timeout_ms)) != 0:
+            raise YouTubeLiveError(_zmq_error(lib))
+        if lib.zmq_setsockopt(sock, ZMQ_RCVTIMEO, ctypes.byref(timeout_ms), ctypes.sizeof(timeout_ms)) != 0:
+            raise YouTubeLiveError(_zmq_error(lib))
+        if lib.zmq_connect(sock, endpoint.encode("utf-8")) != 0:
+            raise YouTubeLiveError(_zmq_error(lib))
+        payload = message.encode("utf-8")
+        if lib.zmq_send(sock, ctypes.c_char_p(payload), len(payload), 0) < 0:
+            raise YouTubeLiveError(_zmq_error(lib))
+        reply_buf = ctypes.create_string_buffer(2048)
+        reply_len = lib.zmq_recv(sock, reply_buf, ctypes.sizeof(reply_buf) - 1, 0)
+        if reply_len < 0:
+            raise YouTubeLiveError(_zmq_error(lib))
+        return reply_buf.raw[:reply_len].decode("utf-8", errors="ignore").strip()
+    finally:
+        if sock:
+            lib.zmq_close(sock)
+        lib.zmq_ctx_term(ctx)
+
+
+def _live_audio_commands(mode):
+    mode = normalize_audio_mode(mode)
+    if mode == "voice":
+        return [
+            ("highpass@voice_hp", "mix", "1"),
+            ("lowpass@voice_lp", "mix", "1"),
+            ("acompressor@voice_comp", "mix", "1"),
+            ("volume@audio_gain", "volume", "2"),
+        ]
+    if mode == "mute":
+        return [
+            ("highpass@voice_hp", "mix", "0"),
+            ("lowpass@voice_lp", "mix", "0"),
+            ("acompressor@voice_comp", "mix", "0"),
+            ("volume@audio_gain", "volume", "0"),
+        ]
+    return [
+        ("highpass@voice_hp", "mix", "0"),
+        ("lowpass@voice_lp", "mix", "0"),
+        ("acompressor@voice_comp", "mix", "0"),
+        ("volume@audio_gain", "volume", "1"),
+    ]
+
+
+def _apply_live_audio_mode(relay, mode):
+    endpoint = (relay or {}).get("control_url") or _proxy_control_url()
+    last_error = None
+    for _ in range(20):
+        try:
+            replies = []
+            for target, command, arg in _live_audio_commands(mode):
+                reply = _zmq_send_command(endpoint, f"{target} {command} {arg}")
+                replies.append(reply)
+            for reply in replies:
+                if not reply.startswith("0 "):
+                    raise YouTubeLiveError(f"Failed to update live audio mode: {reply or 'no relay reply'}")
+            return replies
+        except YouTubeLiveError as exc:
+            last_error = exc
+            time.sleep(0.1)
+    raise last_error or YouTubeLiveError("Failed to update live audio mode")
 
 
 def _build_publish_info(stream_name, ingestion_info, ap_ip):
@@ -637,14 +833,23 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None)
             "listen_url": listen_url,
             "target_url": target_url,
             "log_path": str(RELAY_LOG_PATH),
+            "control_url": _proxy_control_url(),
             "stream_title": stream_title,
             "started_at": time.time(),
             "ffmpeg_bin": FFMPEG_BIN,
-            "mode": "copy" if audio_mode == "normal" else "transcode-audio" if audio_mode == "voice" else "video-only",
+            "mode": "copy-video-live-audio",
             "audio_mode": audio_mode,
         },
         default_mode=audio_mode,
     )
+    try:
+        _apply_live_audio_mode(relay, audio_mode)
+    except YouTubeLiveError:
+        try:
+            os.kill(proc.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        raise
     save_relay_state(relay)
     return relay
 
@@ -667,12 +872,22 @@ def set_proxy_audio_mode(mode):
         return load_stream_state()
 
     state["audio_mode"] = desired_mode
-    state["relay"] = _start_proxy_relay(
-        listen_url=listen_url,
-        target_url=target_url,
-        stream_title=state.get("title", ""),
-        audio_mode=desired_mode,
-    )
+    if relay.get("running"):
+        _apply_live_audio_mode(relay, desired_mode)
+        relay["audio_mode"] = desired_mode
+        relay["audio_mode_label"] = audio_mode_spec(desired_mode)["label"]
+        relay["audio_mode_short"] = audio_mode_spec(desired_mode)["short_label"]
+        relay["audio_mode_description"] = audio_mode_spec(desired_mode)["description"]
+        relay["updated_at"] = time.time()
+        relay["status"] = "running"
+        state["relay"] = relay
+    else:
+        state["relay"] = _start_proxy_relay(
+            listen_url=listen_url,
+            target_url=target_url,
+            stream_title=state.get("title", ""),
+            audio_mode=desired_mode,
+        )
     save_stream_state(state)
     return load_stream_state()
 

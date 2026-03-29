@@ -41,7 +41,8 @@ Current web UI behavior:
   - poll for completed authorization
   - create a YouTube Live stream/broadcast pair
   - start a local RTMP passthrough relay on the Pi and show a QR for the current publish target
-  - switch proxy relay audio between `Normal`, `Voice Focus`, and `Mute`
+  - detect the incoming relay video dimensions and show portrait vs landscape once a sender is connected
+  - switch proxy relay audio between `Normal`, `Voice Focus`, and `Mute` without reconnecting the sender
 - Captive-portal status in the UI is only the Pi uplink's status, not a per-client browser/session test for each device behind `wlan0`
 - Software update section in the UI can:
   - run `/home/pi/update.sh`
@@ -93,23 +94,83 @@ YouTube config:
 - `YOUTUBE_DEVICE_STATE_PATH` default: `/run/rpi_ap_tools_youtube_device.json`
 - `YOUTUBE_STREAM_STATE_PATH` default: `/var/lib/rpi_ap_tools/youtube_stream.json`
 - `YOUTUBE_STREAM_TITLE_PREFIX` default: `RPi Live`
-- `YOUTUBE_STREAM_PRIVACY_STATUS` default: `unlisted`
+- `YOUTUBE_STREAM_PRIVACY_STATUS` default: `public`
 - `YOUTUBE_PROXY_ENABLED` default: `1`
 - `YOUTUBE_PROXY_AUDIO_MODE` default: `normal`
 - Local proxy relay defaults:
   - publish URL: `rtmp://{ap_ip}:7777/live`
   - listen URL: `rtmp://0.0.0.0:7777/live`
+  - live audio control URL: `tcp://127.0.0.1:5559`
   - upstream target: YouTube `ingestionAddress` plus the generated stream key
-  - relay process in `normal` mode: `ffmpeg -listen 1 -c copy`
-  - `voice` mode keeps video copy but re-encodes audio with a speech-focused filter
-  - `mute` mode drops outgoing audio entirely
-  - changing relay audio mode restarts the listener, so the upstream RTMP sender may need to reconnect
+  - relay process keeps video copy and always encodes audio once, so audio mode can change live
+  - `voice` mode keeps video copy and enables a speech-focused filter chain on the running relay
+  - `mute` mode sets outgoing audio gain to zero on the running relay
+  - relay orientation detection is inferred from the incoming video dimensions seen in the ffmpeg relay log
+  - audio mode changes are sent to ffmpeg through `azmq`, so the upstream RTMP sender stays connected
+  - this requires an ffmpeg build with `azmq` support and a system `libzmq` shared library available on the Pi
 - Optional relay env vars:
   - `YOUTUBE_PROXY_PUBLISH_URL`
   - `YOUTUBE_PROXY_RTMP_PORT`
   - `YOUTUBE_PROXY_RTMP_APP`
+  - `YOUTUBE_PROXY_ZMQ_PORT`
   - `YOUTUBE_PROXY_FFMPEG_BIN`
   - `YOUTUBE_RELAY_LOG_PATH`
+
+Screen map:
+
+Home:
+```text
++------------------+
+| HOME         MENU|
+|                  |
+|   AP NAME        |
+|   Uplink SSID    |
+|   SIG 78%        |
+|                  |
+| YT NORM  CPU 12% |
+| TEMP 49C         |
+| PRESS CENTER     |
++------------------+
+```
+
+Menu:
+```text
++------------------+
+| MAIN             |
+| > YouTube        |
+|   Matrix         |
+|   Games          |
+|   FFmpeg         |
+|   Update         |
+|   Settings       |
++------------------+
+```
+
+YouTube auth pending:
+```text
++------------------+
+| YOUTUBE   PENDING|
+| Open URL, enter  |
+| code             |
+| CODE ABCD-EFGH   |
+| youtube.com/...  |
+| EXP 14M32        |
+| PRESS CHECK      |
++------------------+
+```
+
+YouTube relay active:
+```text
++------------------+
+| YOUTUBE     READY|
+| Stream title     |
+| youtube watch... |
+| AUDIO VOICE      |
+| 1080x1920        |
+| PORTRAIT         |
+| LEFT=BACK        |
++------------------+
+```
 
 Credential DB:
 - Default path: `/etc/rpi_ap_tools_wifi_db.json`
