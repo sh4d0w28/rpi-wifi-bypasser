@@ -5,11 +5,12 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, Response, render_template, request, redirect, url_for, flash
 from youtube_live import (
     YouTubeLiveError,
     get_auth_status,
     list_audio_modes,
+    load_creation_log,
     load_creation_state,
     load_stream_state,
     qr_data_uri,
@@ -353,6 +354,7 @@ def index():
     runtime = load_runtime_status()
     youtube_auth = get_auth_status()
     youtube_creation = load_creation_state()
+    youtube_creation_log = load_creation_log()
     youtube_stream = load_stream_state()
     youtube_ready = bool(
         youtube_auth.get("client_configured")
@@ -373,6 +375,7 @@ def index():
         youtube_auth=youtube_auth,
         youtube_ready=youtube_ready,
         youtube_creation=youtube_creation,
+        youtube_creation_log=youtube_creation_log,
         youtube_stream=youtube_stream,
         youtube_audio_modes=list_audio_modes(),
         youtube_qr=qr_data_uri((youtube_stream or {}).get("qr_payload", "")),
@@ -479,6 +482,15 @@ def youtube_audio_mode():
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
     return redirect(url_for("index"))
+
+
+@APP.route("/youtube/creation-log", methods=["GET"])
+def youtube_creation_log():
+    payload = load_creation_log(max_bytes=None)
+    text = payload.get("text", "")
+    if not text:
+        text = f"No creation log yet.\nExpected path: {payload.get('path', '-')}\n"
+    return Response(text, mimetype="text/plain")
 
 
 if __name__ == "__main__":

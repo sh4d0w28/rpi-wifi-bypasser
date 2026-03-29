@@ -93,6 +93,7 @@ YouTube config:
 - `YOUTUBE_TOKEN_PATH` default: `/var/lib/rpi_ap_tools/youtube_token.json`
 - `YOUTUBE_DEVICE_STATE_PATH` default: `/run/rpi_ap_tools_youtube_device.json`
 - `YOUTUBE_STREAM_STATE_PATH` default: `/var/lib/rpi_ap_tools/youtube_stream.json`
+- `YOUTUBE_CREATE_LOG_PATH` default: `/run/rpi_ap_tools_youtube_create.log`
 - `YOUTUBE_STREAM_TITLE_PREFIX` default: `RPi Live`
 - `YOUTUBE_STREAM_PRIVACY_STATUS` default: `public`
 - `YOUTUBE_PROXY_ENABLED` default: `1`

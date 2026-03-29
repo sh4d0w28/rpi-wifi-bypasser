@@ -29,6 +29,7 @@ DEVICE_STATE_PATH = Path(os.environ.get("YOUTUBE_DEVICE_STATE_PATH", "/run/rpi_a
 STREAM_STATE_PATH = Path(os.environ.get("YOUTUBE_STREAM_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_stream.json"))
 STREAM_CREATE_STATE_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_STATE_PATH", "/run/rpi_ap_tools_youtube_create.json"))
 STREAM_CREATE_LOCK_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_LOCK_PATH", "/run/rpi_ap_tools_youtube_create.lock"))
+CREATION_LOG_PATH = Path(os.environ.get("YOUTUBE_CREATE_LOG_PATH", "/run/rpi_ap_tools_youtube_create.log"))
 RELAY_STATE_PATH = Path(os.environ.get("YOUTUBE_RELAY_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_relay.json"))
 RELAY_LOG_PATH = Path(os.environ.get("YOUTUBE_RELAY_LOG_PATH", "/run/rpi_ap_tools_youtube_relay.log"))
 STREAM_TITLE_PREFIX = os.environ.get("YOUTUBE_STREAM_TITLE_PREFIX", "RPi Live").strip() or "RPi Live"
@@ -263,6 +264,37 @@ def update_creation_state(**fields):
     state = load_creation_state()
     state.update(fields)
     save_creation_state(state)
+
+
+def reset_creation_log(*, ap_ip="-", title=""):
+    CREATION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    header = [
+        f"[{datetime.now(timezone.utc).isoformat()}] stream creation requested",
+        f"ap_ip={ap_ip or '-'}",
+        f"title={title or '-'}",
+        "",
+    ]
+    CREATION_LOG_PATH.write_text("\n".join(header), encoding="utf-8")
+
+
+def load_creation_log(max_bytes=262144):
+    if not CREATION_LOG_PATH.exists():
+        return {"path": str(CREATION_LOG_PATH), "text": "", "truncated": False}
+    try:
+        raw = CREATION_LOG_PATH.read_bytes()
+    except OSError:
+        return {"path": str(CREATION_LOG_PATH), "text": "", "truncated": False}
+
+    truncated = False
+    if max_bytes is not None and len(raw) > max_bytes:
+        raw = raw[-max_bytes:]
+        truncated = True
+    text = raw.decode("utf-8", errors="replace")
+    if truncated and "\n" in text:
+        text = text.split("\n", 1)[1]
+    if truncated:
+        text = "[earlier log truncated]\n" + text
+    return {"path": str(CREATION_LOG_PATH), "text": text, "truncated": truncated}
 
 
 def _pid_alive(pid):
@@ -1004,6 +1036,7 @@ def _run_creation_job(ap_ip, title):
                 "watch_url": state.get("watch_url", ""),
                 "qr_payload": state.get("qr_payload", ""),
                 "relay_status": ((state.get("relay") or {}).get("status", "")),
+                "log_path": str(CREATION_LOG_PATH),
             }
         )
         LOGGER.info("YouTube async creation job finished successfully: title=%s", state.get("title", ""))
@@ -1016,6 +1049,7 @@ def _run_creation_job(ap_ip, title):
                 "stage": "error",
                 "finished_at": time.time(),
                 "pid": os.getpid(),
+                "log_path": str(CREATION_LOG_PATH),
             }
         )
         LOGGER.exception("YouTube async creation job failed: %s", exc)
@@ -1036,6 +1070,7 @@ def start_stream_creation(*, ap_ip="-", title=None):
         if creation_in_progress():
             LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
             raise YouTubeLiveError("Stream creation already in progress")
+        reset_creation_log(ap_ip=ap_ip, title=title or "")
         save_creation_state(
             {
                 "status": "creating",
@@ -1045,18 +1080,25 @@ def start_stream_creation(*, ap_ip="-", title=None):
                 "started_at": time.time(),
                 "ap_ip": ap_ip,
                 "title": title or "",
+                "log_path": str(CREATION_LOG_PATH),
             }
         )
         LOGGER.info("Starting background YouTube stream creation process: ap_ip=%s title=%s", ap_ip, title or "")
         argv = [sys.executable, str(Path(__file__).resolve()), "create", "--ap-ip", ap_ip or "-"]
         if title:
             argv.extend(["--title", title])
-        proc = subprocess.Popen(
-            argv,
-            stdin=subprocess.DEVNULL,
-            close_fds=True,
-            start_new_session=True,
-        )
+        log_handle = CREATION_LOG_PATH.open("ab")
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                start_new_session=True,
+            )
+        finally:
+            log_handle.close()
         update_creation_state(pid=proc.pid)
     finally:
         _unlock_creation(fd)
@@ -1097,6 +1139,6 @@ def _parse_cli_args(argv):
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "create":
-        logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s")
+        logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s", force=True)
         cli_ap_ip, cli_title = _parse_cli_args(sys.argv[2:])
         _run_creation_job(cli_ap_ip, cli_title)

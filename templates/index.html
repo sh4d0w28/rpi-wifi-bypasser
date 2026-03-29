@@ -213,6 +213,20 @@
       font-size: 14px;
       color: var(--muted);
     }
+    .log-view {
+      margin-top: 10px;
+      padding: 12px;
+      border: 1px solid var(--field-border);
+      border-radius: 12px;
+      background: #050b16;
+      color: var(--text);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      overflow: auto;
+      max-height: 340px;
+    }
     .danger-box {
       margin-top: 12px;
       padding: 12px;
@@ -393,6 +407,20 @@
       <p class="help-text">{{ youtube_creation.message }}</p>
       <p class="help-text">Progress: {{ youtube_creation.progress_pct or 0 }}%</p>
       <p class="help-text">Please wait before starting another stream.</p>
+    </div>
+    {% endif %}
+    {% if youtube_creation_log.text or (youtube_creation and youtube_creation.log_path) %}
+    <div class="qr-card">
+      <p><strong>Create log:</strong> <span class="mono">{{ youtube_creation.log_path if youtube_creation and youtube_creation.log_path else youtube_creation_log.path }}</span></p>
+      <p class="help-text">
+        <a href="/youtube/creation-log" target="_blank" rel="noreferrer">Open raw log</a>
+        {% if youtube_creation_log.truncated %} · Inline view shows only the newest part of the file.{% endif %}
+      </p>
+      {% if youtube_creation_log.text %}
+      <pre class="log-view">{{ youtube_creation_log.text }}</pre>
+      {% else %}
+      <p class="help-text">The log file exists but is currently empty.</p>
+      {% endif %}
     </div>
     {% endif %}
     {% if youtube_auth.device_pending %}
