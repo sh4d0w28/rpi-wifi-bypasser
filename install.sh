@@ -99,7 +99,7 @@ if ! sudo env WLAN0_IFACE="$WLAN0_IFACE" WLAN1_IFACE="$WLAN1_IFACE" "$INSTALL_DI
   echo "Run manually after NetworkManager profiles are ready:"
   echo "  sudo env WLAN0_IFACE=$WLAN0_IFACE WLAN1_IFACE=$WLAN1_IFACE $INSTALL_DIR/configure_shared_egress.sh"
 fi
-
+  
 echo "Installed."
 echo "Prepared files:"
 echo "  Wi-Fi DB: $WIFI_DB_PATH"
