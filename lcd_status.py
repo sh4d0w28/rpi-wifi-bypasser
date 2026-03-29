@@ -21,7 +21,6 @@ from youtube_live import (
     load_creation_state,
     load_stream_state,
     poll_device_authorization,
-    qrcode as youtube_qrcode,
     set_proxy_audio_mode,
     start_device_authorization,
     start_stream_creation,
@@ -553,13 +552,6 @@ def render_probe(draw, state):
         fill = (120, 255, 160) if state["portal_ack_last"]["ok"] else (255, 96, 96)
         draw.text((3, 96), msg, font=FONT, fill=fill)
 
-def build_qr_image(payload, size=116):
-    if not payload or youtube_qrcode is None:
-        return None
-    image = youtube_qrcode.make(payload).convert("RGB")
-    image = image.resize((size, size))
-    return image
-
 def render_youtube(draw, image, state):
     youtube = state["youtube"]
     auth = youtube.get("auth") or {}
@@ -585,7 +577,7 @@ def render_youtube(draw, image, state):
         draw.text((22, 119), "LEFT BACK", font=FONT, fill=(180, 180, 180))
         return
 
-    if youtube.get("auth_required") and not device_pending and not youtube.get("qr_payload"):
+    if youtube.get("auth_required") and not device_pending:
         draw.rectangle((4, 22, 123, 104), outline=(255, 96, 96), width=2)
         draw.rectangle((8, 26, 119, 100), outline=(255, 96, 96), width=1)
         draw.text((22, 40), "AUTH", font=FONT, fill=(255, 230, 230))
@@ -593,19 +585,6 @@ def render_youtube(draw, image, state):
         draw.text((14, 78), fit_text(youtube.get("status_message", "AUTH FIRST"), 16), font=FONT, fill=(255, 210, 210))
         draw.text((16, 119), "PRESS AUTH L BK", font=FONT, fill=(180, 180, 180))
         return
-
-    if youtube.get("qr_payload"):
-        qr_image = build_qr_image(youtube["qr_payload"])
-        if qr_image is not None:
-            image.paste(qr_image, (6, 6))
-            draw.rectangle((0, 118, 127, 127), fill="BLACK")
-            if youtube.get("mode") == "proxy":
-                draw.text((4, 119), fit_text(youtube.get("audio_mode_short", "NORM"), 5), font=FONT, fill=(140, 170, 210))
-                draw.text((50, 119), "LEFT BK", font=FONT, fill=(180, 180, 180))
-            else:
-                draw.text((4, 119), fit_text(youtube.get("mode", "direct").upper(), 7), font=FONT, fill=(140, 170, 210))
-                draw.text((56, 119), "LEFT BK", font=FONT, fill=(180, 180, 180))
-            return
 
     draw.text((3, 3), "YOUTUBE", font=FONT, fill=(140, 170, 210))
     auth_text = "READY" if auth.get("authorized") else "PENDING" if device_pending else "SETUP"

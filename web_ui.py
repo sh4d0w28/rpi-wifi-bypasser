@@ -13,7 +13,6 @@ from youtube_live import (
     load_creation_log,
     load_creation_state,
     load_stream_state,
-    qr_data_uri,
     set_proxy_audio_mode,
     start_device_authorization,
     poll_device_authorization,
@@ -378,7 +377,6 @@ def index():
         youtube_creation_log=youtube_creation_log,
         youtube_stream=youtube_stream,
         youtube_audio_modes=list_audio_modes(),
-        youtube_qr=qr_data_uri((youtube_stream or {}).get("qr_payload", "")),
     )
 
 

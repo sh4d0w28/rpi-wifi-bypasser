@@ -40,7 +40,7 @@ Current web UI behavior:
   - start Google device authorization
   - poll for completed authorization
   - create a YouTube Live stream/broadcast pair
-  - start a local RTMP passthrough relay on the Pi and show a QR for the current publish target
+  - start a local RTMP passthrough relay on the Pi and show the publish URL / relay details
   - detect the incoming relay video dimensions and show portrait vs landscape once a sender is connected
   - switch proxy relay audio between `Normal`, `Voice Focus`, and `Mute` without reconnecting the sender
 - Captive-portal status in the UI is only the Pi uplink's status, not a per-client browser/session test for each device behind `wlan0`
@@ -73,7 +73,7 @@ LCD controls:
   - `Pong`
   - `Catch`
 - The `YouTube` submenu contains:
-  - dashboard / QR view
+  - dashboard / stream status view
   - start device auth
   - check auth when a device code is pending
   - create stream
@@ -97,7 +97,7 @@ YouTube config:
 - `YOUTUBE_STREAM_TITLE_PREFIX` default: `RPi Live`
 - `YOUTUBE_STREAM_PRIVACY_STATUS` default: `public`
 - `YOUTUBE_PROXY_ENABLED` default: `1`
-- `YOUTUBE_PROXY_AUDIO_MODE` default: `normal`
+- `YOUTUBE_PROXY_AUDIO_MODE` is currently forced to `normal` at startup
 - Local proxy relay defaults:
   - publish URL: `rtmp://{ap_ip}:7777/live`
   - listen URL: `rtmp://0.0.0.0:7777/live`

@@ -505,12 +505,6 @@
       <p><strong>RTMPS server:</strong> <span class="mono">{{ youtube_stream.rtmps_ingestion_address or youtube_stream.ingestion_address }}</span></p>
       <p><strong>Stream key:</strong> <span class="mono">{{ youtube_stream.stream_name }}</span></p>
       {% endif %}
-      {% if youtube_qr %}
-      <img src="{{ youtube_qr }}" alt="Current publish QR">
-      {% else %}
-      <p class="help-text">QR rendering needs the Python <span class="mono">qrcode</span> package.</p>
-      {% endif %}
-      <p><strong>QR payload:</strong> <span class="mono">{{ youtube_stream.qr_payload }}</span></p>
     </div>
     {% endif %}
     {% endif %}

@@ -40,7 +40,7 @@ PROXY_RTMP_PORT = int(os.environ.get("YOUTUBE_PROXY_RTMP_PORT", "7777") or "7777
 PROXY_RTMP_APP = os.environ.get("YOUTUBE_PROXY_RTMP_APP", "live").strip().strip("/")
 PROXY_ZMQ_PORT = int(os.environ.get("YOUTUBE_PROXY_ZMQ_PORT", "5559") or "5559")
 FFMPEG_BIN = os.environ.get("YOUTUBE_PROXY_FFMPEG_BIN", "ffmpeg").strip() or "ffmpeg"
-DEFAULT_PROXY_AUDIO_MODE = os.environ.get("YOUTUBE_PROXY_AUDIO_MODE", "normal").strip().lower() or "normal"
+DEFAULT_PROXY_AUDIO_MODE = "normal"
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
@@ -874,14 +874,16 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None)
         },
         default_mode=audio_mode,
     )
-    try:
-        _apply_live_audio_mode(relay, audio_mode)
-    except YouTubeLiveError:
+    if audio_mode != "normal":
         try:
-            os.kill(proc.pid, signal.SIGTERM)
-        except OSError:
-            pass
-        raise
+            _apply_live_audio_mode(relay, audio_mode)
+        except YouTubeLiveError as exc:
+            relay["warning"] = f"Audio mode pending until relay is ready: {exc}"
+            LOGGER.warning(
+                "Proxy relay started but initial live audio mode command failed: mode=%s error=%s",
+                audio_mode,
+                exc,
+            )
     save_relay_state(relay)
     return relay
 
