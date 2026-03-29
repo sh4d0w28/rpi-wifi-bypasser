@@ -60,7 +60,7 @@ PROBE_INTERVAL_SEC = float(os.environ.get("PROBE_INTERVAL_SEC", "60.0"))
 NETWORK_FALLBACK_REFRESH_SEC = float(os.environ.get("NETWORK_FALLBACK_REFRESH_SEC", "30.0"))
 STATUS_WRITE_SEC = float(os.environ.get("STATUS_WRITE_SEC", "5.0"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
-UPDATE_SCRIPT_PATH = Path(os.environ.get("UPDATE_SCRIPT_PATH", "/home/pi/update.sh"))
+UPDATE_SCRIPT_PATH = Path(os.environ.get("UPDATE_SCRIPT_PATH", "/home/pi/update_ap.sh"))
 UPDATE_LOG_PATH = Path(os.environ.get("UPDATE_LOG_PATH", "/run/rpi_ap_tools_update.log"))
 CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
 PORTAL_CAPTURE_URL = os.environ.get("PORTAL_CAPTURE_URL", "http://connectivitycheck.gstatic.com/generate_204").strip()
@@ -80,6 +80,17 @@ PIN_KEY1 = 21
 PIN_KEY2 = 20
 PIN_KEY3 = 16
 FONT = ImageFont.load_default()
+NOKIA_BG = (198, 208, 186)
+NOKIA_BG_DARK = (164, 176, 151)
+NOKIA_PANEL = (214, 222, 203)
+NOKIA_PANEL_EDGE = (96, 110, 88)
+NOKIA_TEXT = (34, 48, 34)
+NOKIA_TEXT_DIM = (72, 86, 70)
+NOKIA_HILITE = (72, 102, 150)
+NOKIA_HILITE_DARK = (44, 64, 96)
+NOKIA_ALERT = (160, 70, 58)
+NOKIA_WARN = (168, 120, 48)
+NOKIA_OK = (56, 108, 60)
 CPU_SAMPLES = deque(maxlen=2)
 MATRIX_CHARS = "01アイウエオカキクケコサシスセソ"
 MATRIX_FONT_W = 6
@@ -280,8 +291,68 @@ def signal_color(signal):
     return (255, 96, 96)
 
 def draw_label_value(draw, x, y, label, value, value_fill="WHITE", gap=22):
-    draw.text((x, y), label, font=FONT, fill=(140, 170, 210))
+    draw.text((x, y), label, font=FONT, fill=NOKIA_TEXT_DIM)
     draw.text((x + gap, y), value, font=FONT, fill=value_fill)
+
+
+def draw_nokia_chrome(draw, title, *, right_text="", left_soft="Back", center_soft="", right_soft="Select"):
+    draw.rectangle((0, 0, 127, 127), fill=NOKIA_BG)
+    for y in range(128):
+        shade = int(8 * y / 127)
+        line_fill = (
+            max(0, NOKIA_BG[0] - shade),
+            max(0, NOKIA_BG[1] - shade),
+            max(0, NOKIA_BG[2] - shade),
+        )
+        draw.line((0, y, 127, y), fill=line_fill)
+    draw.rounded_rectangle((2, 2, 125, 18), radius=4, fill=NOKIA_HILITE, outline=NOKIA_HILITE_DARK)
+    draw.text((6, 6), fit_text(title.upper(), 12), font=FONT, fill=(235, 240, 236))
+    if right_text:
+        draw.text((77, 6), fit_text(right_text.upper(), 8), font=FONT, fill=(228, 234, 232))
+    draw.rounded_rectangle((3, 107, 124, 125), radius=4, fill=NOKIA_BG_DARK, outline=NOKIA_PANEL_EDGE)
+    draw.text((6, 113), fit_text(left_soft.upper(), 7), font=FONT, fill=NOKIA_TEXT)
+    if center_soft:
+        draw.text((46, 113), fit_text(center_soft.upper(), 7), font=FONT, fill=NOKIA_TEXT)
+    if right_soft:
+        draw.text((84, 113), fit_text(right_soft.upper(), 7), font=FONT, fill=NOKIA_TEXT)
+
+
+def draw_nokia_panel(draw, box, *, title=None):
+    draw.rounded_rectangle(box, radius=7, fill=NOKIA_PANEL, outline=NOKIA_PANEL_EDGE)
+    if title:
+        x1, y1, x2, _ = box
+        draw.rounded_rectangle((x1 + 2, y1 + 2, x2 - 2, y1 + 14), radius=5, fill=NOKIA_BG_DARK, outline=NOKIA_PANEL_EDGE)
+        draw.text((x1 + 6, y1 + 5), fit_text(title.upper(), 16), font=FONT, fill=NOKIA_TEXT)
+
+
+def draw_hourglass(draw, center_x, center_y, *, fill=NOKIA_TEXT):
+    top = [(center_x - 10, center_y - 12), (center_x + 10, center_y - 12), (center_x, center_y - 1)]
+    bottom = [(center_x - 10, center_y + 12), (center_x + 10, center_y + 12), (center_x, center_y + 1)]
+    draw.polygon(top, outline=fill)
+    draw.polygon(bottom, outline=fill)
+    draw.line((center_x - 10, center_y - 12, center_x - 10, center_y + 12), fill=fill)
+    draw.line((center_x + 10, center_y - 12, center_x + 10, center_y + 12), fill=fill)
+    draw.line((center_x - 6, center_y - 8, center_x + 6, center_y - 8), fill=fill)
+    draw.line((center_x - 6, center_y + 8, center_x + 6, center_y + 8), fill=fill)
+    draw.polygon(
+        [(center_x - 7, center_y - 9), (center_x + 7, center_y - 9), (center_x, center_y - 2)],
+        fill=fill,
+    )
+    draw.polygon(
+        [(center_x - 7, center_y + 9), (center_x + 7, center_y + 9), (center_x, center_y + 2)],
+        outline=fill,
+    )
+
+
+def render_busy_overlay(draw, state):
+    busy = state.get("busy_action") or {}
+    if not busy:
+        return
+    draw.rounded_rectangle((16, 31, 112, 96), radius=10, fill=(228, 234, 219), outline=NOKIA_PANEL_EDGE)
+    draw.rounded_rectangle((21, 36, 107, 91), radius=8, fill=NOKIA_PANEL, outline=NOKIA_BG_DARK)
+    draw_hourglass(draw, 64, 54, fill=NOKIA_TEXT)
+    draw.text((30, 72), "PLEASE WAIT", font=FONT, fill=NOKIA_TEXT)
+    draw.text((22, 83), fit_text(busy.get("label", "Working"), 14), font=FONT, fill=NOKIA_TEXT_DIM)
 
 def read_button_states():
     states = {name: button_pressed(name, pin) for name, pin in BUTTON_PINS.items()}
@@ -500,100 +571,94 @@ def render_overview(draw, state):
     cpu_pct = state["cpu_pct"]
     mem_pct = state["mem_pct"]
 
-    draw.text((3, 3), "AP", font=FONT, fill=(140, 170, 210))
-    draw.text((19, 3), "OK" if ap_ok else "NO", font=FONT, fill=((120, 255, 160) if ap_ok else (255, 96, 96)))
-    draw.text((46, 3), "CL", font=FONT, fill=(140, 170, 210))
-    draw.text((62, 3), "OK" if cl_ok else "NO", font=FONT, fill=((120, 255, 160) if cl_ok else (255, 96, 96)))
-    draw.text((90, 3), f"{signal}%" if signal != "-" else "--", font=FONT, fill=signal_color(signal))
+    draw_nokia_chrome(draw, "Overview", right_text="Live", left_soft="Back", right_soft="")
+    draw_nokia_panel(draw, (5, 22, 122, 104), title="Status")
+    draw.text((10, 28), "AP", font=FONT, fill=NOKIA_TEXT_DIM)
+    draw.text((26, 28), "OK" if ap_ok else "NO", font=FONT, fill=(NOKIA_OK if ap_ok else NOKIA_ALERT))
+    draw.text((52, 28), "CL", font=FONT, fill=NOKIA_TEXT_DIM)
+    draw.text((68, 28), "OK" if cl_ok else "NO", font=FONT, fill=(NOKIA_OK if cl_ok else NOKIA_ALERT))
+    draw.text((94, 28), f"{signal}%" if signal != "-" else "--", font=FONT, fill=signal_color(signal))
 
-    draw.text((3, 22), fit_text(state["ap_name"], 20), font=FONT, fill=(240, 244, 255))
-    draw.text((3, 35), fit_text(state["active_wifi"]["name"], 20), font=FONT, fill=(120, 220, 255))
+    draw.text((10, 42), fit_text(state["ap_name"], 18), font=FONT, fill=NOKIA_TEXT)
+    draw.text((10, 54), fit_text(state["active_wifi"]["name"], 18), font=FONT, fill=NOKIA_HILITE_DARK)
 
-    draw.line((2, 49, 125, 49), fill=(24, 44, 68), width=1)
-    draw_label_value(draw, 3, 54, "w0", fit_text(state["w0"], 15), (255, 255, 255), gap=18)
-    draw_label_value(draw, 3, 67, "w1", fit_text(state["w1"], 15), (255, 255, 255), gap=18)
+    draw.line((9, 68, 118, 68), fill=NOKIA_PANEL_EDGE, width=1)
+    draw_label_value(draw, 10, 72, "w0", fit_text(state["w0"], 14), NOKIA_TEXT, gap=18)
+    draw_label_value(draw, 10, 83, "w1", fit_text(state["w1"], 14), NOKIA_TEXT, gap=18)
 
-    draw.line((2, 81, 125, 81), fill=(24, 44, 68), width=1)
-    draw_label_value(draw, 3, 86, "RX", f"{human_bytes(state['rx1ps'])}/s", (120, 255, 160), gap=18)
-    draw_label_value(draw, 3, 99, "TX", f"{human_bytes(state['tx1ps'])}/s", (255, 210, 90), gap=18)
+    draw.line((9, 94, 118, 94), fill=NOKIA_PANEL_EDGE, width=1)
+    draw_label_value(draw, 10, 97, "RX", f"{human_bytes(state['rx1ps'])}/s", NOKIA_OK, gap=18)
 
-    draw.line((2, 113, 125, 113), fill=(24, 44, 68), width=1)
     temp_text = "-" if cpu_temp is None else f"{cpu_temp:.0f}C"
     cpu_text = "-" if cpu_pct is None else f"{cpu_pct:.0f}%"
     mem_text = "-" if mem_pct is None else f"{mem_pct:.0f}%"
-    draw.text((3, 117), "T", font=FONT, fill=(140, 170, 210))
-    draw.text((13, 117), temp_text, font=FONT, fill=metric_color(cpu_temp, 60, 75))
-    draw.text((43, 117), "C", font=FONT, fill=(140, 170, 210))
-    draw.text((53, 117), cpu_text, font=FONT, fill=metric_color(cpu_pct, 60, 85))
-    draw.text((83, 117), "M", font=FONT, fill=(140, 170, 210))
-    draw.text((93, 117), mem_text, font=FONT, fill=metric_color(mem_pct, 70, 85))
+    draw.text((68, 97), fit_text(f"TX {human_bytes(state['tx1ps'])}/s", 9), font=FONT, fill=NOKIA_WARN)
+    draw.text((10, 113), fit_text(f"T {temp_text}", 8), font=FONT, fill=metric_color(cpu_temp, 60, 75))
+    draw.text((47, 113), fit_text(f"C {cpu_text}", 8), font=FONT, fill=metric_color(cpu_pct, 60, 85))
+    draw.text((86, 113), fit_text(f"M {mem_text}", 8), font=FONT, fill=metric_color(mem_pct, 70, 85))
 
 def render_probe(draw, state):
     probe = state["probe"]
-    draw.text((3, 3), "PROBE", font=FONT, fill=(140, 170, 210))
-    draw.text((3, 20), fit_text(state["active_wifi"]["name"], 20), font=FONT, fill=(120, 220, 255))
-    draw.text((3, 33), f"IP {fit_text(state['w1'], 16)}", font=FONT, fill=(240, 244, 255))
+    draw_nokia_chrome(draw, "Probe", right_text="Net", left_soft="Back", right_soft="")
+    draw_nokia_panel(draw, (5, 22, 122, 104), title="Link Test")
+    draw.text((10, 28), fit_text(state["active_wifi"]["name"], 18), font=FONT, fill=NOKIA_HILITE_DARK)
+    draw.text((10, 40), f"IP {fit_text(state['w1'], 15)}", font=FONT, fill=NOKIA_TEXT)
 
-    draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
+    draw.line((9, 53, 118, 53), fill=NOKIA_PANEL_EDGE, width=1)
     yt_text = "-" if probe["youtube_ping_ms"] is None else f"{probe['youtube_ping_ms']:.0f}ms"
     rtmp_text = "-" if probe["youtube_rtmp_ms"] is None else f"{probe['youtube_rtmp_ms']:.0f}ms"
-    draw_label_value(draw, 3, 54, "YT", yt_text, (120, 220, 255), gap=18)
-    draw_label_value(draw, 64, 54, "RT", rtmp_text, (255, 210, 90), gap=18)
-    draw_label_value(draw, 3, 67, "NET", fit_text(probe["connectivity"], 12), (240, 244, 255), gap=24)
+    draw_label_value(draw, 10, 58, "YT", yt_text, NOKIA_HILITE_DARK, gap=18)
+    draw_label_value(draw, 68, 58, "RT", rtmp_text, NOKIA_WARN, gap=18)
+    draw_label_value(draw, 10, 71, "NET", fit_text(probe["connectivity"], 11), NOKIA_TEXT, gap=24)
 
-    portal_fill = (255, 210, 90) if probe["portal_suspected"] else (120, 255, 160) if probe["internet_ok"] else (255, 96, 96)
+    portal_fill = NOKIA_WARN if probe["portal_suspected"] else NOKIA_OK if probe["internet_ok"] else NOKIA_ALERT
     portal_text = "PORTAL" if probe["portal_suspected"] else "ONLINE" if probe["internet_ok"] else "OFFLINE"
-    draw.text((3, 82), portal_text, font=FONT, fill=portal_fill)
-    ack_hint = "MENU ACK" if state["portal_ack_configured"] else "no-ack"
-    draw.text((58, 82), ack_hint, font=FONT, fill=(180, 180, 180))
+    draw.text((10, 86), portal_text, font=FONT, fill=portal_fill)
+    ack_hint = "MENU ACK" if state["portal_ack_configured"] else "NO ACK"
+    draw.text((60, 86), ack_hint, font=FONT, fill=NOKIA_TEXT_DIM)
 
     if state["portal_ack_last"]:
         msg = fit_text(state["portal_ack_last"]["message"], 20)
-        fill = (120, 255, 160) if state["portal_ack_last"]["ok"] else (255, 96, 96)
-        draw.text((3, 96), msg, font=FONT, fill=fill)
+        fill = NOKIA_OK if state["portal_ack_last"]["ok"] else NOKIA_ALERT
+        draw.text((10, 98), msg, font=FONT, fill=fill)
 
 def render_youtube(draw, image, state):
     youtube = state["youtube"]
     auth = youtube.get("auth") or {}
     device_pending = bool(auth.get("device_pending"))
     creating = (youtube.get("creation") or {}).get("status") == "creating"
+    draw_nokia_chrome(draw, "YouTube", right_text="Live", left_soft="Back", right_soft="OK")
+    draw_nokia_panel(draw, (5, 22, 122, 104), title="Stream")
     if creating:
         creation = youtube.get("creation") or {}
         progress_pct = max(0, min(100, int(creation.get("progress_pct", 0) or 0)))
         stage_message = fit_text(creation.get("message", "Working"), 18)
         bar_left = 14
-        bar_top = 74
+        bar_top = 76
         bar_right = 113
-        bar_bottom = 88
+        bar_bottom = 89
         fill_width = int((bar_right - bar_left - 2) * (progress_pct / 100.0))
-        draw.rectangle((4, 22, 123, 104), outline=(255, 96, 96), width=2)
-        draw.rectangle((8, 26, 119, 100), outline=(255, 96, 96), width=1)
-        draw.text((14, 34), "STREAM IS", font=FONT, fill=(255, 230, 230))
-        draw.text((16, 48), "CREATING", font=FONT, fill=(255, 230, 230))
-        draw.text((14, 62), stage_message, font=FONT, fill=(255, 210, 210))
-        draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), outline=(255, 170, 170), width=1)
-        draw.rectangle((bar_left + 1, bar_top + 1, bar_left + 1 + fill_width, bar_bottom - 1), fill=(255, 96, 96))
-        draw.text((44, 91), f"{progress_pct:3d}%", font=FONT, fill=(255, 230, 230))
-        draw.text((22, 119), "LEFT BACK", font=FONT, fill=(180, 180, 180))
+        draw.text((16, 39), "STREAM", font=FONT, fill=NOKIA_TEXT)
+        draw.text((16, 52), "CREATING", font=FONT, fill=NOKIA_TEXT)
+        draw.text((16, 64), stage_message, font=FONT, fill=NOKIA_TEXT_DIM)
+        draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), outline=NOKIA_PANEL_EDGE, width=1)
+        draw.rectangle((bar_left + 1, bar_top + 1, bar_left + 1 + fill_width, bar_bottom - 1), fill=NOKIA_HILITE)
+        draw.text((46, 93), f"{progress_pct:3d}%", font=FONT, fill=NOKIA_TEXT)
         return
 
     if youtube.get("auth_required") and not device_pending:
-        draw.rectangle((4, 22, 123, 104), outline=(255, 96, 96), width=2)
-        draw.rectangle((8, 26, 119, 100), outline=(255, 96, 96), width=1)
-        draw.text((22, 40), "AUTH", font=FONT, fill=(255, 230, 230))
-        draw.text((22, 56), "FIRST", font=FONT, fill=(255, 230, 230))
-        draw.text((14, 78), fit_text(youtube.get("status_message", "AUTH FIRST"), 16), font=FONT, fill=(255, 210, 210))
-        draw.text((16, 119), "PRESS AUTH L BK", font=FONT, fill=(180, 180, 180))
+        draw.text((24, 42), "AUTH", font=FONT, fill=NOKIA_ALERT)
+        draw.text((24, 56), "FIRST", font=FONT, fill=NOKIA_ALERT)
+        draw.text((14, 78), fit_text(youtube.get("status_message", "AUTH FIRST"), 16), font=FONT, fill=NOKIA_TEXT_DIM)
         return
 
-    draw.text((3, 3), "YOUTUBE", font=FONT, fill=(140, 170, 210))
     auth_text = "READY" if auth.get("authorized") else "PENDING" if device_pending else "SETUP"
-    auth_fill = (120, 255, 160) if auth_text == "READY" else (255, 210, 90) if auth_text == "PENDING" else (255, 96, 96)
-    draw.text((72, 3), auth_text, font=FONT, fill=auth_fill)
-    draw.text((3, 20), fit_text(youtube.get("title", "No stream yet"), 20), font=FONT, fill=(240, 244, 255))
-    draw.text((3, 33), fit_text(youtube.get("watch_url", "Use web UI"), 20), font=FONT, fill=(120, 220, 255))
-    draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
-    draw.text((3, 56), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(240, 244, 255))
+    auth_fill = NOKIA_OK if auth_text == "READY" else NOKIA_WARN if auth_text == "PENDING" else NOKIA_ALERT
+    draw.text((12, 28), fit_text(youtube.get("title", "No stream yet"), 18), font=FONT, fill=NOKIA_TEXT)
+    draw.text((12, 40), auth_text, font=FONT, fill=auth_fill)
+    draw.text((54, 40), fit_text(youtube.get("watch_url", "Use web UI").replace("https://", ""), 11), font=FONT, fill=NOKIA_HILITE_DARK)
+    draw.line((10, 52, 117, 52), fill=NOKIA_PANEL_EDGE, width=1)
+    draw.text((12, 57), fit_text(youtube.get("status_message", "Use YT menu"), 18), font=FONT, fill=NOKIA_TEXT)
     if device_pending:
         device = auth.get("device") or {}
         code = device.get("user_code", "")
@@ -601,38 +666,26 @@ def render_youtube(draw, image, state):
         expires_at = float(device.get("expires_at", 0) or 0)
         seconds_left = max(0, int(expires_at - time.time())) if expires_at else 0
         expires_text = f"EXP {seconds_left // 60}M{seconds_left % 60:02d}" if seconds_left else "EXP SOON"
-        draw.text((3, 72), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
-        draw.text((3, 85), fit_text(verify.replace("https://", ""), 20), font=FONT, fill=(120, 220, 255))
-        draw.text((3, 98), fit_text(expires_text, 20), font=FONT, fill=(200, 200, 200))
-        draw.text((3, 111), "PRESS CHECK LEFT BK", font=FONT, fill=(180, 180, 180))
+        draw.text((12, 71), fit_text(f"CODE {code}", 18), font=FONT, fill=NOKIA_WARN)
+        draw.text((12, 83), fit_text(verify.replace("https://", ""), 18), font=FONT, fill=NOKIA_HILITE_DARK)
+        draw.text((12, 95), fit_text(expires_text, 18), font=FONT, fill=NOKIA_TEXT_DIM)
         return
     elif youtube.get("mode") == "proxy":
-        draw.text((3, 72), fit_text(f"AUD {youtube.get('audio_mode_label', 'Normal')}", 20), font=FONT, fill=(120, 220, 255))
+        draw.text((12, 71), fit_text(f"AUD {youtube.get('audio_mode_label', 'Normal')}", 18), font=FONT, fill=NOKIA_HILITE_DARK)
     relay = youtube.get("relay") or {}
     if relay.get("video_width") and relay.get("video_height"):
         video_text = f"{relay.get('video_width')}x{relay.get('video_height')} {str(relay.get('video_orientation', '')).upper()}".strip()
-        draw.text((3, 88), fit_text(video_text, 20), font=FONT, fill=(180, 220, 180))
-        draw.text((3, 101), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(180, 180, 180))
-        if not auth.get("authorized"):
-            draw.text((12, 114), "PRESS=AUTH LEFT=BK", font=FONT, fill=(180, 180, 180))
-        else:
-            draw.text((18, 114), "LEFT=BACK", font=FONT, fill=(180, 180, 180))
+        draw.text((12, 85), fit_text(video_text, 18), font=FONT, fill=NOKIA_OK)
+        draw.text((12, 97), fit_text(youtube.get("status_message", "Use YT menu"), 18), font=FONT, fill=NOKIA_TEXT_DIM)
         return
-    draw.text((3, 88), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(180, 180, 180))
-    if not auth.get("authorized"):
-        draw.text((12, 101), "PRESS=AUTH LEFT=BK", font=FONT, fill=(180, 180, 180))
-    else:
-        draw.text((18, 101), "LEFT=BACK", font=FONT, fill=(180, 180, 180))
+    draw.text((12, 87), fit_text(youtube.get("status_message", "Use YT menu"), 18), font=FONT, fill=NOKIA_TEXT_DIM)
 
 def render_portal_warning(draw, state):
     if not state["probe"].get("auth_required"):
         return
 
-    draw.rectangle((0, 50, 127, 78), fill=(110, 0, 0))
-    draw.line((0, 50, 127, 50), fill=(255, 96, 96), width=1)
-    draw.line((0, 78, 127, 78), fill=(255, 96, 96), width=1)
-    draw.text((20, 56), "AUTH", font=FONT, fill=(255, 230, 230))
-    draw.text((20, 67), "FIRST", font=FONT, fill=(255, 230, 230))
+    draw.rounded_rectangle((23, 56, 104, 79), radius=6, fill=(228, 206, 188), outline=NOKIA_ALERT)
+    draw.text((34, 62), "AUTH FIRST", font=FONT, fill=NOKIA_ALERT)
 
 
 def render_matrix(draw, state):
@@ -674,55 +727,43 @@ def render_home(draw, state):
     if state.get("youtube", {}).get("mode") == "proxy":
         mode_text = state["youtube"].get("audio_mode_short", "NORM")
 
-    draw.rectangle((0, 0, 127, 127), fill="BLACK")
-    draw.rectangle((0, 0, 127, 18), fill=(18, 46, 18))
-    draw.line((0, 19, 127, 19), fill=(90, 180, 90), width=1)
-    draw.text((4, 5), "HOME", font=FONT, fill=(200, 255, 200))
-    draw.text((92, 5), "MENU", font=FONT, fill=(120, 200, 120))
+    draw_nokia_chrome(draw, "Home", right_text="6230", left_soft="", center_soft="Menu", right_soft="")
+    draw_nokia_panel(draw, (7, 24, 120, 77), title="Network")
+    draw.text((14, 33), fit_text(ap_name.upper(), 14), font=FONT, fill=NOKIA_TEXT)
+    draw.text((14, 46), fit_text(wifi_name, 16), font=FONT, fill=NOKIA_HILITE_DARK)
+    draw.text((14, 59), fit_text(f"SIG {signal}%", 14) if signal != "-" else "SIG --", font=FONT, fill=signal_color(signal))
 
-    draw.rectangle((6, 28, 121, 88), outline=(40, 120, 40), width=1)
-    draw.rectangle((10, 32, 117, 84), outline=(24, 72, 24), width=1)
-    draw.text((16, 37), fit_text(ap_name.upper(), 14), font=FONT, fill=(240, 255, 240))
-    draw.text((16, 51), fit_text(wifi_name, 16), font=FONT, fill=(120, 220, 255))
-    draw.text((16, 65), fit_text(f"SIG {signal}%", 14) if signal != "-" else "SIG --", font=FONT, fill=signal_color(signal))
-
-    draw.text((8, 96), fit_text(f"YT {mode_text}", 10), font=FONT, fill=(255, 210, 90))
-    draw.text((66, 96), fit_text(f"CPU {cpu_text}", 10), font=FONT, fill=metric_color(cpu_pct, 60, 85))
-    draw.text((8, 108), fit_text(f"TEMP {temp_text}", 12), font=FONT, fill=metric_color(temp, 60, 75))
-    draw.text((8, 120), "PRESS CENTER", font=FONT, fill=(180, 220, 180))
+    draw_nokia_panel(draw, (7, 81, 120, 103), title="Quick")
+    draw.text((13, 91), fit_text(f"YT {mode_text}", 10), font=FONT, fill=NOKIA_WARN)
+    draw.text((67, 91), fit_text(f"CPU {cpu_text}", 10), font=FONT, fill=metric_color(cpu_pct, 60, 85))
+    draw.text((13, 100), fit_text(f"TEMP {temp_text}", 12), font=FONT, fill=metric_color(temp, 60, 75))
 
 
 def render_game_pong(draw, state):
     game = state["games"]["pong"]
-    draw.rectangle((0, 0, 127, 127), fill="BLACK")
-    draw.line((63, 16, 63, 127), fill=(36, 72, 36), width=1)
-    draw.rectangle((4, game["player_y"], 7, game["player_y"] + 20), fill=(120, 255, 160))
-    draw.rectangle((120, game["cpu_y"], 123, game["cpu_y"] + 20), fill=(255, 210, 90))
-    draw.rectangle((game["ball_x"], game["ball_y"], game["ball_x"] + 4, game["ball_y"] + 4), fill=(240, 255, 240))
-    draw.rectangle((0, 0, 127, 15), fill=(0, 18, 0))
-    draw.text((4, 3), "PONG", font=FONT, fill=(160, 255, 160))
-    draw.text((48, 3), f"{game['player_score']}:{game['cpu_score']}", font=FONT, fill=(240, 255, 240))
+    draw_nokia_chrome(draw, "Pong", right_text=f"{game['player_score']}:{game['cpu_score']}", left_soft="Back", right_soft="")
+    draw.rounded_rectangle((4, 20, 123, 104), radius=6, fill=(190, 204, 181), outline=NOKIA_PANEL_EDGE)
+    draw.line((63, 20, 63, 104), fill=NOKIA_PANEL_EDGE, width=1)
+    draw.rectangle((4, game["player_y"], 7, game["player_y"] + 20), fill=NOKIA_OK)
+    draw.rectangle((120, game["cpu_y"], 123, game["cpu_y"] + 20), fill=NOKIA_WARN)
+    draw.rectangle((game["ball_x"], game["ball_y"], game["ball_x"] + 4, game["ball_y"] + 4), fill=NOKIA_TEXT)
     if game["game_over"]:
-        draw.rectangle((18, 44, 109, 84), fill=(8, 24, 8), outline=(90, 180, 90))
-        draw.text((33, 50), "GAME OVER", font=FONT, fill=(255, 210, 90))
-        draw.text((28, 64), "PRESS RESTART", font=FONT, fill=(200, 230, 200))
-    draw.text((10, 119), "U/D MOVE L BK", font=FONT, fill=(120, 180, 120))
+        draw.rounded_rectangle((18, 44, 109, 84), radius=6, fill=NOKIA_PANEL, outline=NOKIA_PANEL_EDGE)
+        draw.text((33, 50), "GAME OVER", font=FONT, fill=NOKIA_WARN)
+        draw.text((28, 64), "PRESS RESTART", font=FONT, fill=NOKIA_TEXT)
 
 
 def render_game_catch(draw, state):
     game = state["games"]["catch"]
-    draw.rectangle((0, 0, 127, 127), fill="BLACK")
-    draw.rectangle((0, 0, 127, 15), fill=(12, 12, 44))
-    draw.text((4, 3), "CATCH", font=FONT, fill=(160, 220, 255))
-    draw.text((56, 3), f"S{game['score']} L{game['lives']}", font=FONT, fill=(240, 255, 240))
+    draw_nokia_chrome(draw, "Catch", right_text=f"S{game['score']} L{game['lives']}", left_soft="Back", right_soft="")
+    draw.rounded_rectangle((4, 20, 123, 104), radius=6, fill=(190, 204, 181), outline=NOKIA_PANEL_EDGE)
     for item in game["drops"]:
-        draw.rectangle((item["x"], item["y"], item["x"] + 4, item["y"] + 4), fill=(255, 210, 90))
-    draw.rectangle((game["player_x"], 118, game["player_x"] + 20, 122), fill=(120, 220, 255))
+        draw.rectangle((item["x"], item["y"], item["x"] + 4, item["y"] + 4), fill=NOKIA_WARN)
+    draw.rectangle((game["player_x"], 100, game["player_x"] + 20, 104), fill=NOKIA_HILITE)
     if game["game_over"]:
-        draw.rectangle((18, 44, 109, 84), fill=(8, 16, 32), outline=(120, 180, 255))
-        draw.text((33, 50), "GAME OVER", font=FONT, fill=(255, 210, 90))
-        draw.text((28, 64), "PRESS RESTART", font=FONT, fill=(210, 230, 255))
-    draw.text((10, 119), "U/D MOVE L BK", font=FONT, fill=(120, 180, 220))
+        draw.rounded_rectangle((18, 44, 109, 84), radius=6, fill=NOKIA_PANEL, outline=NOKIA_PANEL_EDGE)
+        draw.text((33, 50), "GAME OVER", font=FONT, fill=NOKIA_WARN)
+        draw.text((28, 64), "PRESS RESTART", font=FONT, fill=NOKIA_TEXT)
 
 
 def render_menu(draw, state):
@@ -734,11 +775,8 @@ def render_menu(draw, state):
     else:
         selected = 0
 
-    draw.rectangle((0, 0, 127, 127), fill="BLACK")
-    draw.rectangle((0, 0, 127, 15), fill=(0, 24, 0))
-    draw.line((0, 16, 127, 16), fill=(0, 72, 0), width=1)
-    draw.text((3, 3), title, font=FONT, fill=(160, 255, 160))
-    draw.text((88, 3), "MENU", font=FONT, fill=(120, 180, 120))
+    draw_nokia_chrome(draw, title, right_text="Menu", left_soft="Back", center_soft="", right_soft="Open")
+    draw_nokia_panel(draw, (5, 22, 122, 104), title="Items")
 
     visible_rows = 6
     row_height = 14
@@ -751,25 +789,24 @@ def render_menu(draw, state):
         if idx >= len(items):
             break
         item = items[idx]
-        y = 20 + (row * row_height)
+        y = 28 + (row * row_height)
         is_selected = idx == selected
         label = item.get("label", "-")
         if item.get("checked"):
             label = f"{label} *"
         text = fit_text(label, 18)
-        fill = (255, 255, 255) if not item.get("disabled") else (120, 120, 120)
+        fill = NOKIA_TEXT if not item.get("disabled") else NOKIA_TEXT_DIM
         if is_selected:
-            draw.rectangle((2, y - 1, 125, y + 10), fill=(32, 72, 32), outline=(120, 200, 120))
-            fill = (240, 255, 240) if not item.get("disabled") else (180, 180, 180)
-        draw.text((6, y), text, font=FONT, fill=fill)
+            draw.rounded_rectangle((9, y - 1, 117, y + 10), radius=4, fill=NOKIA_HILITE, outline=NOKIA_HILITE_DARK)
+            fill = (236, 241, 238) if not item.get("disabled") else (196, 204, 200)
+        draw.text((14, y), text, font=FONT, fill=fill)
 
     message = fit_text(state.get("menu_message", ""), 20)
     if message:
-        draw.text((3, 106), message, font=FONT, fill=(255, 210, 90))
-    draw.text((18, 119), "P OK L BK", font=FONT, fill=(120, 180, 120))
+        draw.text((10, 96), message, font=FONT, fill=NOKIA_WARN)
 
 def render_screen(lcd, state):
-    image = Image.new("RGB", (128, 128), "BLACK")
+    image = Image.new("RGB", (128, 128), NOKIA_BG)
     draw = ImageDraw.Draw(image)
 
     if state.get("ui_mode") == "home":
@@ -783,9 +820,7 @@ def render_screen(lcd, state):
     elif state["screen_id"] == "game_catch":
         render_game_catch(draw, state)
     elif state.get("ui_mode") == "screen":
-        draw.rectangle((0, 0, 127, 127), fill="BLACK")
-        draw.rectangle((0, 0, 127, 15), fill=(18, 18, 18))
-        draw.line((0, 16, 127, 16), fill=(64, 64, 64), width=1)
+        draw_nokia_chrome(draw, state.get("screen_title", "Screen"), left_soft="Back", right_soft="")
     if state.get("ui_mode") == "screen" and state["screen_id"] == "overview":
         render_overview(draw, state)
     elif state.get("ui_mode") == "screen" and state["screen_id"] == "probe":
@@ -794,6 +829,7 @@ def render_screen(lcd, state):
         render_youtube(draw, image, state)
     if state.get("ui_mode") == "screen" and state["screen_id"] in ("overview", "probe", "youtube"):
         render_portal_warning(draw, state)
+    render_busy_overlay(draw, state)
 
     lcd.LCD_ShowImage(image.rotate(90), 0, 0)
 
@@ -861,6 +897,7 @@ def main():
     current_screen = None
     ui_mode = "home"
     ui_message = ""
+    busy_action = None
     last_display_at = 0.0
     last_network_refresh_at = 0.0
     last_status_write_at = 0.0
@@ -885,6 +922,89 @@ def main():
     def set_ui_message(message):
         nonlocal ui_message
         ui_message = fit_text(message or "", 20)
+
+    def compose_state(now):
+        menu_title, menu_items = current_menu_definition()
+        return {
+            "ui_mode": ui_mode,
+            "screen_id": current_screen,
+            "screen_title": {
+                "overview": "Overview",
+                "probe": "Probe",
+                "youtube": "YouTube",
+                "matrix": "Matrix",
+                "game_pong": "Pong",
+                "game_catch": "Catch",
+            }.get(current_screen, "Menu"),
+            "menu_title": menu_title,
+            "menu_items": menu_items,
+            "menu_selected": current_menu_entry()["selected"],
+            "menu_message": ui_message,
+            "busy_action": busy_action,
+            "ap_name": ap_name,
+            "w0": w0,
+            "w1": w1,
+            "active_wifi": active_wifi,
+            "cpu_temp": cpu_temp,
+            "cpu_pct": cpu_pct,
+            "mem_pct": mem_pct,
+            "rx1ps": rx1ps,
+            "tx1ps": tx1ps,
+            "ap_ok": ap_ok,
+            "cl_ok": cl_ok,
+            "signal": signal,
+            "probe": probe_cache,
+            "portal_ack_configured": bool(CAPTIVE_PORTAL_ACK_CMD),
+            "portal_ack_last": portal_ack_last,
+            "youtube": {
+                "auth": youtube_auth,
+                "title": youtube_stream.get("title", ""),
+                "watch_url": youtube_stream.get("watch_url", ""),
+                "qr_payload": youtube_stream.get("qr_payload", ""),
+                "mode": youtube_stream.get("mode", "direct"),
+                "audio_mode": youtube_stream.get("audio_mode", "normal"),
+                "audio_mode_label": youtube_stream.get("audio_mode_label", "Normal"),
+                "audio_mode_short": youtube_stream.get("audio_mode_short", "NORM"),
+                "relay": youtube_stream.get("relay", {}),
+                "creation": youtube_creation,
+                "status_message": youtube_status_message if youtube_auth.get("device_pending") else "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
+                "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),
+            },
+            "matrix": {
+                "columns": matrix_columns,
+                "tick": matrix_tick,
+            },
+            "games": {
+                "pong": pong_game,
+                "catch": catch_game,
+            },
+            "updated_at": now,
+        }
+
+    def repaint_now():
+        nonlocal last_display_at, last_display_signature, last_status_write_at, last_status_signature
+        now = time.time()
+        state = compose_state(now)
+        render_screen(lcd, state)
+        signature = state_signature(state)
+        atomic_write_json(STATUS_PATH, state)
+        last_display_at = now
+        last_display_signature = signature
+        last_status_write_at = now
+        last_status_signature = signature
+
+    def show_busy(label, *, screen=None, mode=None):
+        nonlocal busy_action, current_screen, ui_mode
+        if screen is not None:
+            current_screen = screen
+        if mode is not None:
+            ui_mode = mode
+        busy_action = {"label": fit_text(label, 14), "started_at": time.time()}
+        repaint_now()
+
+    def clear_busy():
+        nonlocal busy_action
+        busy_action = None
 
     def build_root_menu():
         return [
@@ -1038,6 +1158,7 @@ def main():
             current_screen = "youtube"
             ui_mode = "screen"
             return
+        show_busy("Create stream", screen="youtube", mode="screen")
         try:
             start_stream_creation(ap_ip=w0)
             youtube_creation = load_creation_state()
@@ -1050,9 +1171,12 @@ def main():
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
             ui_mode = "screen"
+        finally:
+            clear_busy()
 
     def trigger_youtube_auth_start():
         nonlocal youtube_auth, youtube_status_message, current_screen, ui_mode
+        show_busy("Start auth", screen="youtube", mode="screen")
         try:
             start_device_authorization()
             youtube_auth = get_auth_status()
@@ -1065,9 +1189,12 @@ def main():
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
             ui_mode = "screen"
+        finally:
+            clear_busy()
 
     def trigger_youtube_auth_poll():
         nonlocal youtube_auth, youtube_status_message, current_screen, ui_mode
+        show_busy("Check auth", screen="youtube", mode="screen")
         try:
             poll_device_authorization()
             youtube_auth = get_auth_status()
@@ -1081,9 +1208,12 @@ def main():
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
             ui_mode = "screen"
+        finally:
+            clear_busy()
 
     def trigger_youtube_audio(mode):
         nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode
+        show_busy("Audio mode", screen="youtube", mode="screen")
         try:
             youtube_stream = set_proxy_audio_mode(mode)
             youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', mode.upper())}"
@@ -1095,19 +1225,24 @@ def main():
             set_ui_message(youtube_status_message)
             current_screen = "youtube"
             ui_mode = "screen"
+        finally:
+            clear_busy()
 
     def trigger_portal_ack():
         nonlocal portal_ack_last, current_screen, ui_mode
+        show_busy("Portal ack", screen="probe", mode="screen")
         portal_ack_last = perform_portal_ack()
         set_ui_message(portal_ack_last["message"])
         current_screen = "probe"
         ui_mode = "screen"
+        clear_busy()
 
     def trigger_update_run():
         nonlocal current_screen, ui_mode
         if not UPDATE_SCRIPT_PATH.exists():
-            set_ui_message("update.sh missing")
+            set_ui_message("update_ap.sh missing")
             return
+        show_busy("Start update", mode="menu")
         try:
             UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
             log_handle = UPDATE_LOG_PATH.open("ab")
@@ -1125,6 +1260,8 @@ def main():
         except Exception as exc:
             logging.exception("Failed to start update script")
             set_ui_message(fit_text(str(exc), 20))
+        finally:
+            clear_busy()
 
     def open_selected_item():
         nonlocal current_screen, ui_mode, pong_game, catch_game
@@ -1163,6 +1300,8 @@ def main():
 
     def handle_pressed_button(name):
         nonlocal pong_game, catch_game
+        if busy_action:
+            return
         logical_name = translate_button_for_rotation(name)
         logging.info("Button pressed: %s -> %s", name, logical_name)
         if name in ("KEY1", "KEY2", "KEY3"):
@@ -1317,62 +1456,7 @@ def main():
                 "portal_capture": portal_capture,
             }
 
-        menu_title, menu_items = current_menu_definition()
-
-        state = {
-            "ui_mode": ui_mode,
-            "screen_id": current_screen,
-            "screen_title": {
-                "overview": "Overview",
-                "probe": "Probe",
-                "youtube": "YouTube",
-                "matrix": "Matrix",
-                "game_pong": "Pong",
-                "game_catch": "Catch",
-            }.get(current_screen, "Menu"),
-            "menu_title": menu_title,
-            "menu_items": menu_items,
-            "menu_selected": current_menu_entry()["selected"],
-            "menu_message": ui_message,
-            "ap_name": ap_name,
-            "w0": w0,
-            "w1": w1,
-            "active_wifi": active_wifi,
-            "cpu_temp": cpu_temp,
-            "cpu_pct": cpu_pct,
-            "mem_pct": mem_pct,
-            "rx1ps": rx1ps,
-            "tx1ps": tx1ps,
-            "ap_ok": ap_ok,
-            "cl_ok": cl_ok,
-            "signal": signal,
-            "probe": probe_cache,
-            "portal_ack_configured": bool(CAPTIVE_PORTAL_ACK_CMD),
-            "portal_ack_last": portal_ack_last,
-            "youtube": {
-                "auth": youtube_auth,
-                "title": youtube_stream.get("title", ""),
-                "watch_url": youtube_stream.get("watch_url", ""),
-                "qr_payload": youtube_stream.get("qr_payload", ""),
-                "mode": youtube_stream.get("mode", "direct"),
-                "audio_mode": youtube_stream.get("audio_mode", "normal"),
-                "audio_mode_label": youtube_stream.get("audio_mode_label", "Normal"),
-                "audio_mode_short": youtube_stream.get("audio_mode_short", "NORM"),
-                "relay": youtube_stream.get("relay", {}),
-                "creation": youtube_creation,
-                "status_message": youtube_status_message if youtube_auth.get("device_pending") else "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
-                "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),
-            },
-            "matrix": {
-                "columns": matrix_columns,
-                "tick": matrix_tick,
-            },
-            "games": {
-                "pong": pong_game,
-                "catch": catch_game,
-            },
-            "updated_at": now,
-        }
+        state = compose_state(now)
 
         signature = state_signature(state)
         active_refresh_sec = game_refresh_sec if current_screen in ("game_pong", "game_catch") and ui_mode == "screen" else DISPLAY_REFRESH_SEC

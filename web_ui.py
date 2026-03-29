@@ -10,6 +10,7 @@ from youtube_live import (
     YouTubeLiveError,
     get_auth_status,
     list_audio_modes,
+    list_rotation_modes,
     load_creation_log,
     load_creation_state,
     load_stream_state,
@@ -377,6 +378,7 @@ def index():
         youtube_creation_log=youtube_creation_log,
         youtube_stream=youtube_stream,
         youtube_audio_modes=list_audio_modes(),
+        youtube_rotation_modes=list_rotation_modes(),
     )
 
 
@@ -456,6 +458,7 @@ def youtube_device_poll():
 @APP.route("/youtube/create", methods=["POST"])
 def youtube_create():
     title = request.form.get("title", "").strip()
+    rotation = request.form.get("rotation", "0").strip()
     ap_ip = get_ip("wlan0").split("/", 1)[0]
     runtime = load_runtime_status()
     probe = runtime.get("probe", {}) if isinstance(runtime, dict) else {}
@@ -464,7 +467,7 @@ def youtube_create():
         flash("AUTH FIRST", "error")
         return redirect(url_for("index"))
     try:
-        start_stream_creation(ap_ip=ap_ip, title=title)
+        start_stream_creation(ap_ip=ap_ip, title=title, rotation=rotation)
         flash("YouTube stream creation started.", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")

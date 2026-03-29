@@ -466,6 +466,16 @@
         <button type="button" class="chip js-title-prefill" data-title="{{ active.name or ap_name }}">Use active uplink</button>
         <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }} {{ wlan0_ip.split('/', 1)[0] if wlan0_ip and wlan0_ip != '-' else '' }}">AP + IP</button>
       </div>
+      <label for="youtube-rotation">Rotation</label>
+      <select id="youtube-rotation" name="rotation">
+        {% for item in youtube_rotation_modes %}
+        <option
+          value="{{ item.value }}"
+          {% if (youtube_creation and youtube_creation.rotation == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.rotation == item.value) or ((not youtube_stream or not youtube_stream.rotation) and item.value == '0') %}selected{% endif %}
+        >{{ item.label }}</option>
+        {% endfor %}
+      </select>
+      <p class="help-text">Rotate 90 and Rotate -90 re-encode video in the proxy relay. Off keeps the current copy-video path.</p>
       <button type="submit" {% if not youtube_ready or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
     </form>
 
@@ -482,7 +492,9 @@
       <p><strong>Relay target:</strong> <span class="mono">{{ youtube_stream.target_url }}</span></p>
       <p><strong>Relay listen:</strong> <span class="mono">{{ youtube_stream.proxy_listen_url }}</span></p>
       <p><strong>Audio mode:</strong> <span class="mono">{{ youtube_stream.audio_mode_label }}</span></p>
+      <p><strong>Rotation:</strong> <span class="mono">{{ youtube_stream.rotation_label or 'Off' }}</span></p>
       <p class="help-text">{{ youtube_stream.audio_mode_description }}</p>
+      <p class="help-text">{{ youtube_stream.rotation_description }}</p>
       {% if youtube_stream.relay %}
       <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
       <p><strong>Video:</strong> <span class="mono">{% if youtube_stream.relay.video_width and youtube_stream.relay.video_height %}{{ youtube_stream.relay.video_width }}x{{ youtube_stream.relay.video_height }} ({{ youtube_stream.relay.video_orientation or 'unknown' }}){% else %}waiting for incoming stream{% endif %}</span></p>

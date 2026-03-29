@@ -62,6 +62,26 @@ AUDIO_MODE_SPECS = {
         "description": "Drop audio from the outgoing relay.",
     },
 }
+ROTATION_MODE_SPECS = {
+    "0": {
+        "label": "Off",
+        "short_label": "OFF",
+        "description": "Keep the incoming video orientation unchanged.",
+        "transpose": None,
+    },
+    "90": {
+        "label": "Rotate 90",
+        "short_label": "R+90",
+        "description": "Rotate video 90 degrees clockwise before forwarding.",
+        "transpose": "1",
+    },
+    "-90": {
+        "label": "Rotate -90",
+        "short_label": "R-90",
+        "description": "Rotate video 90 degrees counter-clockwise before forwarding.",
+        "transpose": "2",
+    },
+}
 if DEFAULT_PROXY_AUDIO_MODE not in AUDIO_MODE_SPECS:
     DEFAULT_PROXY_AUDIO_MODE = "normal"
 
@@ -92,6 +112,22 @@ def list_audio_modes():
     ]
 
 
+def normalize_rotation_mode(mode):
+    value = str(mode or "").strip()
+    return value if value in ROTATION_MODE_SPECS else "0"
+
+
+def rotation_mode_spec(mode):
+    return ROTATION_MODE_SPECS[normalize_rotation_mode(mode)]
+
+
+def list_rotation_modes():
+    return [
+        {"value": value, **spec}
+        for value, spec in ROTATION_MODE_SPECS.items()
+    ]
+
+
 def _decorate_audio_mode_fields(state, *, default_mode=None):
     if not isinstance(state, dict) or not state:
         return {}
@@ -103,6 +139,24 @@ def _decorate_audio_mode_fields(state, *, default_mode=None):
     payload["audio_mode_short"] = spec["short_label"]
     payload["audio_mode_description"] = spec["description"]
     return payload
+
+
+def _decorate_rotation_fields(state, *, default_mode=None):
+    if not isinstance(state, dict) or not state:
+        return {}
+    payload = dict(state)
+    mode = normalize_rotation_mode(payload.get("rotation") or default_mode or "0")
+    spec = rotation_mode_spec(mode)
+    payload["rotation"] = mode
+    payload["rotation_label"] = spec["label"]
+    payload["rotation_short"] = spec["short_label"]
+    payload["rotation_description"] = spec["description"]
+    return payload
+
+
+def _decorate_stream_state(state, *, default_audio_mode=None, default_rotation=None):
+    payload = _decorate_audio_mode_fields(state, default_mode=default_audio_mode)
+    return _decorate_rotation_fields(payload, default_mode=default_rotation)
 
 
 def _load_json(path, default):
@@ -222,18 +276,23 @@ def clear_device_state():
 
 
 def load_stream_state():
-    state = _decorate_audio_mode_fields(_load_json(STREAM_STATE_PATH, {}), default_mode="normal")
+    state = _decorate_stream_state(_load_json(STREAM_STATE_PATH, {}), default_audio_mode="normal", default_rotation="0")
     if state.get("mode") == "proxy":
         state["audio_mode"] = normalize_audio_mode(state.get("audio_mode") or DEFAULT_PROXY_AUDIO_MODE)
+        state["rotation"] = normalize_rotation_mode(state.get("rotation"))
         relay = load_relay_state()
         if relay:
             state["relay"] = relay
-            state = _decorate_audio_mode_fields(state, default_mode=relay.get("audio_mode"))
+            state = _decorate_stream_state(
+                state,
+                default_audio_mode=relay.get("audio_mode"),
+                default_rotation=relay.get("rotation"),
+            )
     return state
 
 
 def save_stream_state(state):
-    _save_json(STREAM_STATE_PATH, _decorate_audio_mode_fields(state, default_mode="normal"))
+    _save_json(STREAM_STATE_PATH, _decorate_stream_state(state, default_audio_mode="normal", default_rotation="0"))
 
 
 def load_relay_state():
@@ -241,7 +300,10 @@ def load_relay_state():
 
 
 def save_relay_state(state):
-    _save_json(RELAY_STATE_PATH, _decorate_audio_mode_fields(state, default_mode=DEFAULT_PROXY_AUDIO_MODE))
+    _save_json(
+        RELAY_STATE_PATH,
+        _decorate_stream_state(state, default_audio_mode=DEFAULT_PROXY_AUDIO_MODE, default_rotation="0"),
+    )
 
 
 def clear_relay_state():
@@ -266,12 +328,13 @@ def update_creation_state(**fields):
     save_creation_state(state)
 
 
-def reset_creation_log(*, ap_ip="-", title=""):
+def reset_creation_log(*, ap_ip="-", title="", rotation="0"):
     CREATION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     header = [
         f"[{datetime.now(timezone.utc).isoformat()}] stream creation requested",
         f"ap_ip={ap_ip or '-'}",
         f"title={title or '-'}",
+        f"rotation={normalize_rotation_mode(rotation)}",
         "",
     ]
     CREATION_LOG_PATH.write_text("\n".join(header), encoding="utf-8")
@@ -325,7 +388,7 @@ def normalize_creation_state(state):
 def normalize_relay_state(state):
     if not isinstance(state, dict):
         return {}
-    state = _decorate_audio_mode_fields(state, default_mode=DEFAULT_PROXY_AUDIO_MODE)
+    state = _decorate_stream_state(state, default_audio_mode=DEFAULT_PROXY_AUDIO_MODE, default_rotation="0")
     state = _populate_relay_video_fields(state)
     pid = state.get("pid")
     if not pid:
@@ -638,7 +701,9 @@ def _relay_audio_filter():
     )
 
 
-def _proxy_relay_argv(*, listen_url, target_url, audio_mode):
+def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation):
+    rotation = normalize_rotation_mode(rotation)
+    rotation_spec = rotation_mode_spec(rotation)
     argv = [
         FFMPEG_BIN,
         "-hide_banner",
@@ -650,8 +715,6 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode):
         listen_url,
         "-map",
         "0:v?",
-        "-c:v",
-        "copy",
         "-map",
         "0:a?",
         "-c:a",
@@ -665,6 +728,23 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode):
         "-af",
         _relay_audio_filter(),
     ]
+    if rotation_spec.get("transpose"):
+        argv.extend(
+            [
+                "-vf",
+                f"transpose={rotation_spec['transpose']}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-tune",
+                "zerolatency",
+                "-pix_fmt",
+                "yuv420p",
+            ]
+        )
+    else:
+        argv.extend(["-c:v", "copy"])
     argv.extend(["-f", "flv", target_url])
     return argv
 
@@ -834,14 +914,15 @@ def _stop_proxy_relay():
     )
 
 
-def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None):
+def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None, rotation=None):
     if not target_url:
         raise YouTubeLiveError("Missing YouTube RTMP target for proxy relay")
     _stop_proxy_relay()
     RELAY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log_handle = RELAY_LOG_PATH.open("ab")
     audio_mode = normalize_audio_mode(audio_mode)
-    argv = _proxy_relay_argv(listen_url=listen_url, target_url=target_url, audio_mode=audio_mode)
+    rotation = normalize_rotation_mode(rotation)
+    argv = _proxy_relay_argv(listen_url=listen_url, target_url=target_url, audio_mode=audio_mode, rotation=rotation)
     try:
         proc = subprocess.Popen(
             argv,
@@ -857,7 +938,7 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None)
     except Exception:
         log_handle.close()
         raise
-    relay = _decorate_audio_mode_fields(
+    relay = _decorate_stream_state(
         {
             "status": "running",
             "running": True,
@@ -869,10 +950,12 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None)
             "stream_title": stream_title,
             "started_at": time.time(),
             "ffmpeg_bin": FFMPEG_BIN,
-            "mode": "copy-video-live-audio",
+            "mode": "transcode-video-live-audio" if rotation != "0" else "copy-video-live-audio",
             "audio_mode": audio_mode,
+            "rotation": rotation,
         },
-        default_mode=audio_mode,
+        default_audio_mode=audio_mode,
+        default_rotation=rotation,
     )
     if audio_mode != "normal":
         try:
@@ -921,13 +1004,15 @@ def set_proxy_audio_mode(mode):
             target_url=target_url,
             stream_title=state.get("title", ""),
             audio_mode=desired_mode,
+            rotation=state.get("rotation"),
         )
     save_stream_state(state)
     return load_stream_state()
 
 
-def create_stream_bundle(*, ap_ip="-", title=None):
+def create_stream_bundle(*, ap_ip="-", title=None, rotation=None):
     title = (title or "").strip() or _default_stream_title()
+    rotation = normalize_rotation_mode(rotation)
     LOGGER.info("YouTube stream creation request started: title=%s ap_ip=%s", title, ap_ip)
     LOGGER.info("Creating YouTube liveStream resource and waiting for API response")
     update_creation_state(status="creating", message="Creating stream target", progress_pct=20, stage="stream")
@@ -1001,6 +1086,7 @@ def create_stream_bundle(*, ap_ip="-", title=None):
         "privacy_status": STREAM_PRIVACY_STATUS,
         "ap_ip": ap_ip,
         "audio_mode": DEFAULT_PROXY_AUDIO_MODE if PROXY_ENABLED else "normal",
+        "rotation": rotation,
         **publish,
     }
     _stop_proxy_relay()
@@ -1010,6 +1096,7 @@ def create_stream_bundle(*, ap_ip="-", title=None):
             target_url=state.get("target_url", ""),
             stream_title=title,
             audio_mode=state.get("audio_mode"),
+            rotation=state.get("rotation"),
         )
     save_stream_state(state)
     LOGGER.info(
@@ -1021,11 +1108,11 @@ def create_stream_bundle(*, ap_ip="-", title=None):
     return state
 
 
-def _run_creation_job(ap_ip, title):
+def _run_creation_job(ap_ip, title, rotation):
     try:
         update_creation_state(pid=os.getpid(), status="creating")
-        LOGGER.info("YouTube async creation job started: ap_ip=%s title=%s", ap_ip, title or "")
-        state = create_stream_bundle(ap_ip=ap_ip, title=title)
+        LOGGER.info("YouTube async creation job started: ap_ip=%s title=%s rotation=%s", ap_ip, title or "", rotation)
+        state = create_stream_bundle(ap_ip=ap_ip, title=title, rotation=rotation)
         save_creation_state(
             {
                 "status": "ready",
@@ -1058,7 +1145,7 @@ def _run_creation_job(ap_ip, title):
         raise
 
 
-def start_stream_creation(*, ap_ip="-", title=None):
+def start_stream_creation(*, ap_ip="-", title=None, rotation=None):
     if creation_in_progress():
         LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
         raise YouTubeLiveError("Stream creation already in progress")
@@ -1067,12 +1154,13 @@ def start_stream_creation(*, ap_ip="-", title=None):
         message = validation.get("message") or "YouTube Live validation failed"
         LOGGER.warning("Rejected YouTube stream creation request because validation failed: %s", message)
         raise YouTubeLiveError(message)
+    rotation = normalize_rotation_mode(rotation)
     fd = _lock_creation()
     try:
         if creation_in_progress():
             LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
             raise YouTubeLiveError("Stream creation already in progress")
-        reset_creation_log(ap_ip=ap_ip, title=title or "")
+        reset_creation_log(ap_ip=ap_ip, title=title or "", rotation=rotation)
         save_creation_state(
             {
                 "status": "creating",
@@ -1082,13 +1170,16 @@ def start_stream_creation(*, ap_ip="-", title=None):
                 "started_at": time.time(),
                 "ap_ip": ap_ip,
                 "title": title or "",
+                "rotation": rotation,
                 "log_path": str(CREATION_LOG_PATH),
             }
         )
-        LOGGER.info("Starting background YouTube stream creation process: ap_ip=%s title=%s", ap_ip, title or "")
+        LOGGER.info("Starting background YouTube stream creation process: ap_ip=%s title=%s rotation=%s", ap_ip, title or "", rotation)
         argv = [sys.executable, str(Path(__file__).resolve()), "create", "--ap-ip", ap_ip or "-"]
         if title:
             argv.extend(["--title", title])
+        if rotation != "0":
+            argv.extend(["--rotation", rotation])
         log_handle = CREATION_LOG_PATH.open("ab")
         try:
             proc = subprocess.Popen(
@@ -1124,6 +1215,7 @@ def qr_data_uri(payload):
 def _parse_cli_args(argv):
     ap_ip = "-"
     title = ""
+    rotation = "0"
     idx = 0
     while idx < len(argv):
         item = argv[idx]
@@ -1135,12 +1227,16 @@ def _parse_cli_args(argv):
             title = argv[idx + 1]
             idx += 2
             continue
+        if item == "--rotation" and idx + 1 < len(argv):
+            rotation = argv[idx + 1]
+            idx += 2
+            continue
         idx += 1
-    return ap_ip, title
+    return ap_ip, title, normalize_rotation_mode(rotation)
 
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "create":
         logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s", force=True)
-        cli_ap_ip, cli_title = _parse_cli_args(sys.argv[2:])
-        _run_creation_job(cli_ap_ip, cli_title)
+        cli_ap_ip, cli_title, cli_rotation = _parse_cli_args(sys.argv[2:])
+        _run_creation_job(cli_ap_ip, cli_title, cli_rotation)
