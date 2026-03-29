@@ -22,7 +22,7 @@ Changes in this version:
   - Set `CAPTIVE_PORTAL_ACK_CMD` to a site-specific command or script
   - Press `KEY3` on the HAT or use the web button to run it when a portal is suspected
 - Web UI software update action:
-  - starts `/home/pi/update.sh` through `rpi-ap-update.service`
+  - starts `/home/pi/update_ap.sh` through `rpi-ap-update.service`
   - runs outside the Flask service so the web UI can restart safely during install
   - shows last known update status and points to the journal command
 - Shared egress helper:
@@ -45,7 +45,7 @@ Current web UI behavior:
   - switch proxy relay audio between `Normal`, `Voice Focus`, and `Mute` without reconnecting the sender
 - Captive-portal status in the UI is only the Pi uplink's status, not a per-client browser/session test for each device behind `wlan0`
 - Software update section in the UI can:
-  - run `/home/pi/update.sh`
+  - run `/home/pi/update_ap.sh`
   - show whether the update job is idle, running, or failed
   - keep working even though the update restarts the web UI service, because the job runs in its own oneshot systemd service
 
@@ -84,7 +84,7 @@ LCD controls:
   - the device code and verification URL are shown on the LCD
   - `PRESS` checks auth completion while a device code is pending
 - Matrix, games, probe checks, and YouTube state refresh only run while their related screen or menu is active
-- `Update` runs `/home/pi/update.sh` in the background from the LCD UI
+- `Update` runs `/home/pi/update_ap.sh` in the background from the LCD UI
 - LCD-triggered update output is written to `/run/rpi_ap_tools_update.log`
 - If `CAPTIVE_PORTAL_ACK_CMD` is configured, the `Settings` submenu also shows `Portal Ack`
 
@@ -189,7 +189,7 @@ Suggested storage layout:
 
 Update runner:
 - systemd unit: `rpi-ap-update.service`
-- default script path: `/home/pi/update.sh`
+- default script path: `/home/pi/update_ap.sh`
 - manual start: `sudo systemctl start --no-block rpi-ap-update.service`
 - logs: `journalctl -u rpi-ap-update.service -n 50`
 

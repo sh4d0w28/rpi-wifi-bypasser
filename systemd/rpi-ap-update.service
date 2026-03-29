@@ -6,6 +6,6 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/home/pi
-ExecStart=/usr/bin/env bash /home/pi/update.sh
+ExecStart=/usr/bin/env bash /home/pi/update_ap.sh
 TimeoutStartSec=0
 User=root
