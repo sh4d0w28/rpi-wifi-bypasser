@@ -203,6 +203,14 @@ Shared egress / captive portal notes:
 - If a captive portal keys only on hotspot MAC/IP, one authorization on the Pi/uplink should then cover all devices behind `wlan0`.
 - If a captive portal keys on browser cookies, per-device TLS interception, or per-device application login, no generic router-side change can fully collapse all devices into one browser session.
 
+AP setup:
+- This bundle expects `wlan0` to be the local AP device and `wlan1` to be the upstream client device.
+- If you moved to a new USB Wi-Fi adapter or a fresh Pi image, recreate the AP profile with:
+  - `sudo env WLAN0_IFACE=wlan0 AP_CONNECTION_NAME=rpi-ap AP_SSID=RPi-AP AP_PASSWORD=raspberry /opt/rpi_ap_tools/configure_ap.sh`
+- The AP helper creates or updates a NetworkManager hotspot profile on `wlan0` with IPv4 shared mode.
+- If you want an open AP for testing, use `AP_AUTH_MODE=open`.
+- The web UI and LCD now read the AP SSID from either `hostapd.conf` or the NetworkManager profile.
+
 Diagnostics env vars:
 - `STATUS_PATH` default: `/run/rpi_ap_tools_status.json`
 - `REFRESH_SEC` default: `2`

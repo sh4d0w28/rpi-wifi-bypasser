@@ -92,6 +92,21 @@ def get_ap_name():
         for line in HOSTAPD_CONF.read_text(encoding="utf-8", errors="ignore").splitlines():
             if line.strip().startswith("ssid="):
                 return line.split("=", 1)[1].strip()
+    result = run(
+        [
+            "nmcli",
+            "-t",
+            "-f",
+            "NAME,DEVICE,TYPE,802-11-wireless.ssid",
+            "connection",
+            "show",
+        ],
+        check=False,
+    )
+    for line in result.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 4 and parts[1] == os.environ.get("WLAN0_IFACE", "wlan0") and parts[2] == "802-11-wireless" and parts[3]:
+            return parts[3]
     return "unknown"
 
 

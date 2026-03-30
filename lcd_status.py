@@ -116,6 +116,20 @@ def read_ap_name():
         for line in HOSTAPD_CONF.read_text(encoding="utf-8", errors="ignore").splitlines():
             if line.strip().startswith("ssid="):
                 return line.split("=", 1)[1].strip()
+    proc = run(
+        [
+            "nmcli",
+            "-t",
+            "-f",
+            "NAME,DEVICE,TYPE,802-11-wireless.ssid",
+            "connection",
+            "show",
+        ]
+    )
+    for line in proc.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) >= 4 and parts[1] == WLAN_AP and parts[2] == "802-11-wireless" and parts[3]:
+            return parts[3]
     return "unknown"
 
 def read_ipv4(dev):

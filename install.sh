@@ -11,11 +11,12 @@ WLAN0_IFACE=${WLAN0_IFACE:-wlan0}
 WLAN1_IFACE=${WLAN1_IFACE:-wlan1}
 
 sudo mkdir -p "$INSTALL_DIR"
-sudo cp -r web_ui.py lcd_status.py youtube_live.py configure_shared_egress.sh templates systemd "$INSTALL_DIR"/
+sudo cp -r web_ui.py lcd_status.py youtube_live.py configure_shared_egress.sh configure_ap.sh templates systemd "$INSTALL_DIR"/
 sudo chmod +x "$INSTALL_DIR"/web_ui.py
 sudo chmod +x "$INSTALL_DIR"/lcd_status.py
 sudo chmod +x "$INSTALL_DIR"/youtube_live.py
 sudo chmod +x "$INSTALL_DIR"/configure_shared_egress.sh
+sudo chmod +x "$INSTALL_DIR"/configure_ap.sh
 sudo apt-get update
 sudo apt-get install -y python3-qrcode python3-pil ffmpeg
 
@@ -126,6 +127,8 @@ echo "  3. Restart services"
 echo "  4. Open the web UI and use Start YouTube auth"
 echo "Shared egress reconfigure:"
 echo "  sudo env WLAN0_IFACE=$WLAN0_IFACE WLAN1_IFACE=$WLAN1_IFACE $INSTALL_DIR/configure_shared_egress.sh"
+echo "AP profile create/reconfigure:"
+echo "  sudo env WLAN0_IFACE=$WLAN0_IFACE AP_CONNECTION_NAME=rpi-ap AP_SSID=RPi-AP AP_PASSWORD=raspberry $INSTALL_DIR/configure_ap.sh"
 echo "Restart services:"
 echo "  sudo systemctl restart rpi-shared-egress.service"
 echo "  sudo systemctl restart rpi-wlan1-ui.service"
