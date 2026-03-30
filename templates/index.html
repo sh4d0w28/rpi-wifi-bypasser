@@ -485,7 +485,7 @@
         >{{ item.label }}</option>
         {% endfor %}
       </select>
-      <p class="help-text">Rotate 90 and Rotate -90 re-encode video in the proxy relay. Off keeps the current copy-video path.</p>
+      <p class="help-text">Rotate 90 and Rotate -90 re-encode video in the proxy relay. On a Pi 4B this now prefers the hardware H.264 encoder when FFmpeg exposes it; Off keeps the copy-video path.</p>
       <label for="youtube-fps-mode">Frame rate</label>
       <select id="youtube-fps-mode" name="fps_mode">
         {% for item in youtube_fps_modes %}
@@ -519,6 +519,7 @@
       <p class="help-text">{{ youtube_stream.fps_mode_description }}</p>
       {% if youtube_stream.relay %}
       <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
+      <p><strong>Video encoder:</strong> <span class="mono">{{ youtube_stream.relay.video_encoder_label or youtube_stream.relay.video_encoder or 'copy' }}</span></p>
       <p><strong>Video:</strong> <span class="mono">{% if youtube_stream.relay.video_width and youtube_stream.relay.video_height %}{{ youtube_stream.relay.video_width }}x{{ youtube_stream.relay.video_height }} ({{ youtube_stream.relay.video_orientation or 'unknown' }}){% else %}waiting for incoming stream{% endif %}</span></p>
       <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
       {% endif %}

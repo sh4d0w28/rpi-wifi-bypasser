@@ -586,6 +586,7 @@ def render_probe(draw, state):
 
 def render_youtube(draw, image, state):
     youtube = state["youtube"]
+    probe = state["probe"]
     creating = (youtube.get("creation") or {}).get("status") == "creating"
     if creating:
         creation = youtube.get("creation") or {}
@@ -621,28 +622,28 @@ def render_youtube(draw, image, state):
     auth_fill = (120, 255, 160) if auth_text == "READY" else (255, 210, 90) if auth_text == "PENDING" else (255, 96, 96)
     draw.text((72, 3), auth_text, font=FONT, fill=auth_fill)
     draw.text((3, 20), fit_text(youtube.get("title", "No stream yet"), 20), font=FONT, fill=(240, 244, 255))
-    draw.text((3, 33), fit_text(youtube.get("watch_url", "Use web UI"), 20), font=FONT, fill=(120, 220, 255))
+    draw.text((3, 33), fit_text(f"ROT {youtube.get('rotation_short', 'OFF')}", 10), font=FONT, fill=(255, 210, 90))
+    draw.text((60, 33), fit_text(f"FPS {youtube.get('fps_mode_short', 'ORIG')}", 10), font=FONT, fill=(120, 220, 255))
+    draw.text((3, 41), fit_text(f"AUD {youtube.get('audio_mode_short', 'NORM')}", 20), font=FONT, fill=(120, 255, 160))
     draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
-    live_label = "LIVE" if youtube.get("mode") == "proxy" else "MODE"
-    live_value = (
-        f"A {youtube.get('audio_mode_short', 'NORM')} R {youtube.get('rotation_short', 'OFF')} F {youtube.get('fps_mode_short', 'ORIG')}"
-        if youtube.get("mode") == "proxy"
-        else fit_text(youtube.get("mode", "direct").upper(), 18)
-    )
-    next_value = (
-        f"A {youtube.get('create_audio_short', 'NORM')} R {youtube.get('create_rotation_short', 'OFF')} F {youtube.get('create_fps_short', 'ORIG')}"
-    )
-    draw.text((3, 54), fit_text(f"{live_label} {live_value}", 20), font=FONT, fill=(120, 220, 255))
-    draw.text((3, 67), fit_text(f"NEXT {next_value}", 20), font=FONT, fill=(255, 210, 90))
+    relay = youtube.get("relay") or {}
+    res_text = "-"
+    if relay.get("video_width") and relay.get("video_height"):
+        res_text = f"{relay.get('video_width')}x{relay.get('video_height')}"
+    bitrate_text = relay.get("video_bitrate_text", "-")
+    rt_text = "-" if probe.get("youtube_rtmp_ms") is None else f"{probe.get('youtube_rtmp_ms'):.0f}ms"
+    latency_text = "-" if probe.get("youtube_ping_ms") is None else f"{probe.get('youtube_ping_ms'):.0f}ms"
+    draw.text((3, 54), fit_text(f"RT {rt_text} LAT {latency_text}", 20), font=FONT, fill=(240, 244, 255))
+    draw.text((3, 67), fit_text(f"BR {bitrate_text}", 20), font=FONT, fill=(120, 220, 255))
+    draw.text((3, 80), fit_text(f"RES {res_text}", 20), font=FONT, fill=(255, 210, 90))
     if youtube["auth"].get("device_pending"):
         device = youtube["auth"].get("device") or {}
         code = device.get("user_code", "")
         verify = device.get("verification_url", "") or device.get("verification_url_complete", "")
-        draw.text((3, 82), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
-        draw.text((3, 95), fit_text(verify.replace("https://", ""), 20), font=FONT, fill=(120, 220, 255))
-        draw.text((3, 101), "PRESS=CHECK LEFT=BK", font=FONT, fill=(180, 180, 180))
+        draw.text((3, 93), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
+        draw.text((3, 104), fit_text(verify.replace("https://", ""), 20), font=FONT, fill=(120, 220, 255))
         return
-    draw.text((3, 82), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(240, 244, 255))
+    draw.text((3, 93), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(240, 244, 255))
     if not youtube["auth"].get("authorized"):
         draw.text((12, 101), "PRESS=AUTH LEFT=BK", font=FONT, fill=(180, 180, 180))
     else:

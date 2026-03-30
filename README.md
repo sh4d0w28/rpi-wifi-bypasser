@@ -104,6 +104,7 @@ YouTube config:
   - live audio control URL: `tcp://127.0.0.1:5559`
   - upstream target: YouTube `ingestionAddress` plus the generated stream key
   - relay process keeps video copy and always encodes audio once, so audio mode can change live
+  - when rotation or FPS capping is enabled, the relay now prefers FFmpeg's `h264_v4l2m2m` hardware encoder on the Pi and falls back to `libx264` if that encoder is unavailable
   - `voice` mode keeps video copy and enables a speech-focused filter chain on the running relay
   - `mute` mode sets outgoing audio gain to zero on the running relay
   - relay orientation detection is inferred from the incoming video dimensions seen in the ffmpeg relay log
@@ -115,6 +116,9 @@ YouTube config:
   - `YOUTUBE_PROXY_RTMP_APP`
   - `YOUTUBE_PROXY_ZMQ_PORT`
   - `YOUTUBE_PROXY_FFMPEG_BIN`
+  - `YOUTUBE_PROXY_VIDEO_ENCODER` (`auto`, `libx264`, or a specific FFmpeg encoder name)
+  - `YOUTUBE_PROXY_HW_VIDEO_ENCODER` (default: `h264_v4l2m2m`)
+  - `YOUTUBE_PROXY_HW_VIDEO_BITRATE` (default: `6000k`)
   - `YOUTUBE_RELAY_LOG_PATH`
 
 Screen map:

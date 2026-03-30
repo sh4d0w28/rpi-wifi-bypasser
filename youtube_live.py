@@ -72,13 +72,13 @@ ROTATION_MODE_SPECS = {
     "90": {
         "label": "Rotate 90",
         "short_label": "R+90",
-        "description": "Rotate video 90 degrees clockwise before forwarding.",
+        "description": "Rotate video 90 degrees clockwise before forwarding. The relay uses the Pi hardware encoder when available.",
         "transpose": "1",
     },
     "-90": {
         "label": "Rotate -90",
         "short_label": "R-90",
-        "description": "Rotate video 90 degrees counter-clockwise before forwarding.",
+        "description": "Rotate video 90 degrees counter-clockwise before forwarding. The relay uses the Pi hardware encoder when available.",
         "transpose": "2",
     },
 }
@@ -106,10 +106,19 @@ if DEFAULT_PROXY_AUDIO_MODE not in AUDIO_MODE_SPECS:
     DEFAULT_PROXY_AUDIO_MODE = "normal"
 
 VIDEO_DIMENSION_RE = re.compile(r'(\d{2,5})x(\d{2,5})(?:\s|\[|,|$)')
+FFMPEG_BITRATE_RE = re.compile(r'bitrate=\s*([0-9.]+)\s*kbits/s')
+FFMPEG_SPEED_RE = re.compile(r'speed=\s*([0-9.]+)x')
+FFMPEG_ENCODER_RE = re.compile(r'^\s*[A-Z\.]+\s+([^\s]+)\s+', re.MULTILINE)
+PROXY_VIDEO_PRESET = os.environ.get("YOUTUBE_PROXY_VIDEO_PRESET", "veryfast").strip() or "veryfast"
+PROXY_VIDEO_CRF = str(os.environ.get("YOUTUBE_PROXY_VIDEO_CRF", "18") or "18").strip()
+PROXY_VIDEO_ENCODER = os.environ.get("YOUTUBE_PROXY_VIDEO_ENCODER", "auto").strip().lower() or "auto"
+PROXY_HW_VIDEO_ENCODER = os.environ.get("YOUTUBE_PROXY_HW_VIDEO_ENCODER", "h264_v4l2m2m").strip() or "h264_v4l2m2m"
+PROXY_HW_VIDEO_BITRATE = str(os.environ.get("YOUTUBE_PROXY_HW_VIDEO_BITRATE", "6000k") or "6000k").strip()
 ZMQ_REQ = 3
 ZMQ_LINGER = 17
 ZMQ_RCVTIMEO = 27
 ZMQ_SNDTIMEO = 28
+_ENCODER_CACHE = None
 
 
 class YouTubeLiveError(RuntimeError):
@@ -511,6 +520,89 @@ def _extract_video_dimensions_from_log(log_path):
     return {}
 
 
+def _extract_relay_runtime_metrics_from_log(log_path):
+    if not log_path:
+        return {}
+    try:
+        raw = Path(log_path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return {}
+
+    metrics = {}
+    bitrate_matches = FFMPEG_BITRATE_RE.findall(raw)
+    if bitrate_matches:
+        try:
+            bitrate_kbps = float(bitrate_matches[-1])
+            metrics["video_bitrate_kbps"] = bitrate_kbps
+            metrics["video_bitrate_text"] = f"{int(round(bitrate_kbps))} kbps"
+        except ValueError:
+            pass
+
+    speed_matches = FFMPEG_SPEED_RE.findall(raw)
+    if speed_matches:
+        try:
+            speed = float(speed_matches[-1])
+            metrics["encoder_speed"] = speed
+            metrics["encoder_speed_text"] = f"{speed:.2f}x"
+        except ValueError:
+            pass
+
+    if metrics:
+        metrics["metrics_detected_at"] = time.time()
+    return metrics
+
+
+def _ffmpeg_encoders():
+    global _ENCODER_CACHE
+    if _ENCODER_CACHE is not None:
+        return _ENCODER_CACHE
+    try:
+        result = subprocess.run(
+            [FFMPEG_BIN, "-hide_banner", "-encoders"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=10,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        _ENCODER_CACHE = set()
+        return _ENCODER_CACHE
+    _ENCODER_CACHE = set(FFMPEG_ENCODER_RE.findall(result.stdout or ""))
+    return _ENCODER_CACHE
+
+
+def _resolve_proxy_video_encoder():
+    selected = PROXY_VIDEO_ENCODER
+    encoders = _ffmpeg_encoders()
+    hardware_name = PROXY_HW_VIDEO_ENCODER
+    if selected == "auto":
+        if hardware_name in encoders:
+            selected = hardware_name
+        else:
+            selected = "libx264"
+    if selected != "libx264" and selected not in encoders:
+        LOGGER.warning(
+            "Requested FFmpeg encoder '%s' is unavailable; falling back to libx264",
+            selected,
+        )
+        selected = "libx264"
+    if selected == hardware_name:
+        return {
+            "name": selected,
+            "kind": "hardware",
+            "label": f"Hardware ({selected})",
+        }
+    return {
+        "name": "libx264",
+        "kind": "software",
+        "label": "Software (libx264)",
+    }
+
+
 def _populate_relay_video_fields(state):
     if not isinstance(state, dict) or not state:
         return state
@@ -522,9 +614,11 @@ def _populate_relay_video_fields(state):
         return payload
     detected = _extract_video_dimensions_from_log(state.get("log_path", ""))
     if not detected:
-        return state
-    payload = dict(state)
-    payload.update(detected)
+        payload = dict(state)
+    else:
+        payload = dict(state)
+        payload.update(detected)
+    payload.update(_extract_relay_runtime_metrics_from_log(state.get("log_path", "")))
     return payload
 
 
@@ -783,6 +877,7 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode)
         "-hide_banner",
         "-loglevel",
         "warning",
+        "-stats",
         "-listen",
         "1",
         "-i",
@@ -808,24 +903,65 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode)
     if fps_spec.get("fps"):
         video_filters.append(f"fps={fps_spec['fps']}")
     if video_filters:
+        video_encoder = _resolve_proxy_video_encoder()
         argv.extend(
             [
                 "-vf",
                 ",".join(video_filters),
                 "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-tune",
-                "zerolatency",
-                "-pix_fmt",
-                "yuv420p",
             ]
         )
+        if video_encoder["name"] == "libx264":
+            argv.extend(
+                [
+                    "libx264",
+                    "-preset",
+                    PROXY_VIDEO_PRESET,
+                    "-tune",
+                    "zerolatency",
+                    "-crf",
+                    PROXY_VIDEO_CRF,
+                    "-pix_fmt",
+                    "yuv420p",
+                ]
+            )
+        else:
+            argv.extend(
+                [
+                    video_encoder["name"],
+                    "-b:v",
+                    PROXY_HW_VIDEO_BITRATE,
+                    "-maxrate",
+                    PROXY_HW_VIDEO_BITRATE,
+                    "-bufsize",
+                    PROXY_HW_VIDEO_BITRATE,
+                    "-pix_fmt",
+                    "yuv420p",
+                ]
+            )
     else:
         argv.extend(["-c:v", "copy"])
     argv.extend(["-f", "flv", target_url])
     return argv
+
+
+def _proxy_video_pipeline_state(rotation, fps_mode):
+    rotation = normalize_rotation_mode(rotation)
+    fps_mode = normalize_fps_mode(fps_mode)
+    if rotation == "0" and fps_mode == "original":
+        return {
+            "mode": "copy-video-live-audio",
+            "video_encoder": "copy",
+            "video_encoder_kind": "copy",
+            "video_encoder_label": "Passthrough",
+        }
+    encoder = _resolve_proxy_video_encoder()
+    return {
+        "mode": "transcode-video-live-audio",
+        "video_encoder": encoder["name"],
+        "video_encoder_kind": encoder["kind"],
+        "video_encoder_label": encoder["label"],
+    }
 
 
 def _load_libzmq():
@@ -1002,6 +1138,7 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None,
     audio_mode = normalize_audio_mode(audio_mode)
     rotation = normalize_rotation_mode(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
+    video_pipeline = _proxy_video_pipeline_state(rotation, fps_mode)
     argv = _proxy_relay_argv(
         listen_url=listen_url,
         target_url=target_url,
@@ -1036,7 +1173,10 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None,
             "stream_title": stream_title,
             "started_at": time.time(),
             "ffmpeg_bin": FFMPEG_BIN,
-            "mode": "transcode-video-live-audio" if rotation != "0" or fps_mode != "original" else "copy-video-live-audio",
+            "mode": video_pipeline["mode"],
+            "video_encoder": video_pipeline["video_encoder"],
+            "video_encoder_kind": video_pipeline["video_encoder_kind"],
+            "video_encoder_label": video_pipeline["video_encoder_label"],
             "audio_mode": audio_mode,
             "rotation": rotation,
             "fps_mode": fps_mode,
