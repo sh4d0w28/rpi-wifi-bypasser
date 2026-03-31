@@ -3,6 +3,7 @@ set -euo pipefail
 
 INSTALL_DIR=/opt/rpi_ap_tools
 WIFI_DB_PATH=${WIFI_DB_PATH:-/etc/rpi_ap_tools_wifi_db.json}
+AP_CONFIG_FILE=${AP_CONFIG_FILE:-/etc/default/rpi_ap_tools_ap}
 YOUTUBE_CLIENT_CONFIG_PATH=${YOUTUBE_CLIENT_CONFIG_PATH:-/etc/rpi_ap_tools_youtube_client.json}
 YOUTUBE_TOKEN_PATH=${YOUTUBE_TOKEN_PATH:-/var/lib/rpi_ap_tools/youtube_token.json}
 YOUTUBE_STREAM_STATE_PATH=${YOUTUBE_STREAM_STATE_PATH:-/var/lib/rpi_ap_tools/youtube_stream.json}
@@ -26,6 +27,22 @@ if [ ! -f "$WIFI_DB_PATH" ]; then
   sudo sh -c "printf '{}\n' > '$WIFI_DB_PATH'"
 fi
 sudo chmod 600 "$WIFI_DB_PATH" || true
+
+# Preserve AP config across reinstalls/upgrades.
+sudo mkdir -p "$(dirname "$AP_CONFIG_FILE")"
+if [ ! -f "$AP_CONFIG_FILE" ]; then
+  sudo sh -c "cat > '$AP_CONFIG_FILE' <<'EOF'
+# Persistent AP settings for /opt/rpi_ap_tools/configure_ap.sh
+WLAN0_IFACE=wlan0
+AP_CONNECTION_NAME=rpi-ap
+AP_SSID=Rpi_Ap_Secure
+AP_PASSWORD=12345678
+AP_AUTH_MODE=wpa-psk
+AP_BAND=bg
+AP_CHANNEL=6
+EOF"
+fi
+sudo chmod 600 "$AP_CONFIG_FILE" || true
 
 # App config and persistent secret/state directories.
 sudo mkdir -p "$(dirname "$YOUTUBE_CLIENT_CONFIG_PATH")"
@@ -104,6 +121,7 @@ fi
 echo "Installed."
 echo "Prepared files:"
 echo "  Wi-Fi DB: $WIFI_DB_PATH"
+echo "  AP config: $AP_CONFIG_FILE"
 echo "  YouTube client config: $YOUTUBE_CLIENT_CONFIG_PATH"
 echo "  YouTube token: $YOUTUBE_TOKEN_PATH"
 echo "  YouTube stream state: $YOUTUBE_STREAM_STATE_PATH"
@@ -128,7 +146,9 @@ echo "  4. Open the web UI and use Start YouTube auth"
 echo "Shared egress reconfigure:"
 echo "  sudo env WLAN0_IFACE=$WLAN0_IFACE WLAN1_IFACE=$WLAN1_IFACE $INSTALL_DIR/configure_shared_egress.sh"
 echo "AP profile create/reconfigure:"
-echo "  sudo env WLAN0_IFACE=$WLAN0_IFACE AP_CONNECTION_NAME=rpi-ap AP_SSID=RPi-AP AP_PASSWORD=raspberry $INSTALL_DIR/configure_ap.sh"
+echo "  sudo $INSTALL_DIR/configure_ap.sh"
+echo "  Override once with env vars if needed:"
+echo "  sudo env WLAN0_IFACE=$WLAN0_IFACE AP_CONNECTION_NAME=rpi-ap AP_SSID=Rpi_Ap_Secure AP_PASSWORD=12345678 AP_BAND=bg AP_CHANNEL=6 $INSTALL_DIR/configure_ap.sh"
 echo "Restart services:"
 echo "  sudo systemctl restart rpi-shared-egress.service"
 echo "  sudo systemctl restart rpi-wlan1-ui.service"

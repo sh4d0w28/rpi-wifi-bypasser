@@ -1,6 +1,38 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+AP_CONFIG_FILE=${AP_CONFIG_FILE:-/etc/default/rpi_ap_tools_ap}
+
+# Load persisted AP settings when present, but let explicit environment
+# variables passed to this script win over the file.
+WLAN0_IFACE_WAS_SET=${WLAN0_IFACE+x}
+WLAN0_IFACE_ORIG=${WLAN0_IFACE-}
+AP_CONNECTION_NAME_WAS_SET=${AP_CONNECTION_NAME+x}
+AP_CONNECTION_NAME_ORIG=${AP_CONNECTION_NAME-}
+AP_SSID_WAS_SET=${AP_SSID+x}
+AP_SSID_ORIG=${AP_SSID-}
+AP_PASSWORD_WAS_SET=${AP_PASSWORD+x}
+AP_PASSWORD_ORIG=${AP_PASSWORD-}
+AP_AUTH_MODE_WAS_SET=${AP_AUTH_MODE+x}
+AP_AUTH_MODE_ORIG=${AP_AUTH_MODE-}
+AP_BAND_WAS_SET=${AP_BAND+x}
+AP_BAND_ORIG=${AP_BAND-}
+AP_CHANNEL_WAS_SET=${AP_CHANNEL+x}
+AP_CHANNEL_ORIG=${AP_CHANNEL-}
+
+if [ -f "$AP_CONFIG_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$AP_CONFIG_FILE"
+fi
+
+if [ -n "$WLAN0_IFACE_WAS_SET" ]; then WLAN0_IFACE=$WLAN0_IFACE_ORIG; fi
+if [ -n "$AP_CONNECTION_NAME_WAS_SET" ]; then AP_CONNECTION_NAME=$AP_CONNECTION_NAME_ORIG; fi
+if [ -n "$AP_SSID_WAS_SET" ]; then AP_SSID=$AP_SSID_ORIG; fi
+if [ -n "$AP_PASSWORD_WAS_SET" ]; then AP_PASSWORD=$AP_PASSWORD_ORIG; fi
+if [ -n "$AP_AUTH_MODE_WAS_SET" ]; then AP_AUTH_MODE=$AP_AUTH_MODE_ORIG; fi
+if [ -n "$AP_BAND_WAS_SET" ]; then AP_BAND=$AP_BAND_ORIG; fi
+if [ -n "$AP_CHANNEL_WAS_SET" ]; then AP_CHANNEL=$AP_CHANNEL_ORIG; fi
+
 WLAN_AP=${WLAN0_IFACE:-wlan0}
 AP_CONNECTION_NAME=${AP_CONNECTION_NAME:-rpi-ap}
 AP_SSID=${AP_SSID:-RPi-AP}
@@ -37,6 +69,7 @@ log "  device: $WLAN_AP"
 log "  profile: $AP_CONNECTION_NAME"
 log "  ssid: $AP_SSID"
 log "  auth: $AP_AUTH_MODE"
+log "  config: $AP_CONFIG_FILE"
 
 if have_connection "$AP_CONNECTION_NAME"; then
   nmcli connection modify "$AP_CONNECTION_NAME" \
@@ -61,9 +94,7 @@ if [ -n "$AP_CHANNEL" ]; then
 fi
 
 if [ "$AP_AUTH_MODE" = "open" ]; then
-  nmcli connection modify "$AP_CONNECTION_NAME" \
-    802-11-wireless-security.key-mgmt "" \
-    802-11-wireless-security.psk ""
+  nmcli connection modify "$AP_CONNECTION_NAME" remove 802-11-wireless-security || true
 else
   nmcli connection modify "$AP_CONNECTION_NAME" \
     802-11-wireless-security.key-mgmt wpa-psk \

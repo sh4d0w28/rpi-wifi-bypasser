@@ -205,8 +205,18 @@ Shared egress / captive portal notes:
 
 AP setup:
 - This bundle expects `wlan0` to be the local AP device and `wlan1` to be the upstream client device.
+- Persistent AP settings live in `/etc/default/rpi_ap_tools_ap`.
+- `configure_ap.sh` reads that file by default, so reinstalls and update scripts can reapply the same AP settings without hardcoding repo defaults again.
 - If you moved to a new USB Wi-Fi adapter or a fresh Pi image, recreate the AP profile with:
-  - `sudo env WLAN0_IFACE=wlan0 AP_CONNECTION_NAME=rpi-ap AP_SSID=RPi-AP AP_PASSWORD=raspberry /opt/rpi_ap_tools/configure_ap.sh`
+  - `sudo /opt/rpi_ap_tools/configure_ap.sh`
+- Example `/etc/default/rpi_ap_tools_ap` for a Pi 4B 2.4 GHz AP:
+  - `WLAN0_IFACE=wlan0`
+  - `AP_CONNECTION_NAME=rpi-ap`
+  - `AP_SSID=Rpi_Ap_Secure`
+  - `AP_PASSWORD=12345678`
+  - `AP_AUTH_MODE=wpa-psk`
+  - `AP_BAND=bg`
+  - `AP_CHANNEL=6`
 - The AP helper creates or updates a NetworkManager hotspot profile on `wlan0` with IPv4 shared mode.
 - If you want an open AP for testing, use `AP_AUTH_MODE=open`.
 - The web UI and LCD now read the AP SSID from either `hostapd.conf` or the NetworkManager profile.
