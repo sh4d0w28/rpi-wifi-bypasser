@@ -196,6 +196,8 @@ Update runner:
 - default script path: `/home/pi/update_ap.sh`
 - manual start: `sudo systemctl start --no-block rpi-ap-update.service`
 - logs: `journalctl -u rpi-ap-update.service -n 50`
+- the repo now ships `update_ap.sh`, and `install.sh` installs it to `/home/pi/update_ap.sh`
+- the update script runs `install.sh` and then reapplies the AP from `/etc/default/rpi_ap_tools_ap`
 
 Shared egress / captive portal notes:
 - For "authorize once, all devices work", the Pi must be the only upstream client identity.
