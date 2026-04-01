@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import logging
 import os
 import re
 import shutil
@@ -21,6 +22,7 @@ from youtube_live import (
     load_creation_state,
     load_overlay_state,
     load_stream_state,
+    ensure_proxy_relay_running,
     refresh_proxy_overlay,
     save_overlay_state,
     set_proxy_audio_mode,
@@ -46,9 +48,12 @@ WIFI_SCAN_CACHE_SEC = float(os.environ.get("WIFI_SCAN_CACHE_SEC", "10.0"))
 WIFI_RESCAN_MIN_INTERVAL_SEC = float(os.environ.get("WIFI_RESCAN_MIN_INTERVAL_SEC", "30.0"))
 OVERLAY_RENDER_HTML_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_RENDER_HTML_PATH", "/run/rpi_ap_tools_youtube_overlay_rendered.html"))
 OVERLAY_RENDERER_BIN = os.environ.get("YOUTUBE_OVERLAY_BROWSER_BIN", "").strip()
+RELAY_ENSURE_INTERVAL_SEC = max(1.0, float(os.environ.get("YOUTUBE_PROXY_ENSURE_INTERVAL_SEC", "1.0")))
 SCAN_CACHE = {"rows": [], "cached_at": 0.0, "rescanned_at": 0.0}
 OVERLAY_RENDER_LOCK = threading.Lock()
 OVERLAY_RENDERER_THREAD = None
+RELAY_WATCHDOG_THREAD = None
+LOGGER = logging.getLogger(__name__)
 
 
 def run(cmd, check=True):
@@ -375,6 +380,25 @@ def start_overlay_renderer_thread():
     ensure_overlay_html_exists()
     OVERLAY_RENDERER_THREAD = threading.Thread(target=_overlay_renderer_loop, name="overlay-renderer", daemon=True)
     OVERLAY_RENDERER_THREAD.start()
+
+
+def _relay_watchdog_loop():
+    while True:
+        try:
+            ensure_proxy_relay_running()
+        except YouTubeLiveError as exc:
+            LOGGER.warning("Proxy relay watchdog restart failed: %s", exc)
+        except Exception as exc:
+            LOGGER.exception("Proxy relay watchdog crashed: %s", exc)
+        time.sleep(RELAY_ENSURE_INTERVAL_SEC)
+
+
+def start_relay_watchdog_thread():
+    global RELAY_WATCHDOG_THREAD
+    if RELAY_WATCHDOG_THREAD and RELAY_WATCHDOG_THREAD.is_alive():
+        return
+    RELAY_WATCHDOG_THREAD = threading.Thread(target=_relay_watchdog_loop, name="relay-watchdog", daemon=True)
+    RELAY_WATCHDOG_THREAD.start()
 
 
 def run_portal_ack():
@@ -731,6 +755,7 @@ def youtube_creation_log():
 
 
 start_overlay_renderer_thread()
+start_relay_watchdog_thread()
 
 
 if __name__ == "__main__":

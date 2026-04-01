@@ -1705,6 +1705,37 @@ def refresh_proxy_overlay():
     return load_stream_state()
 
 
+def ensure_proxy_relay_running():
+    state = load_stream_state()
+    if not state or state.get("mode") != "proxy":
+        return state
+    listen_url = state.get("proxy_listen_url", "")
+    target_url = state.get("target_url", "")
+    if not listen_url or not target_url:
+        return state
+    relay = state.get("relay") or {}
+    port = _listen_port_from_url(listen_url)
+    if relay.get("running") and _relay_port_listening(port, relay.get("pid")):
+        return state
+    LOGGER.warning(
+        "Proxy relay watchdog restarting relay: pid=%s running=%s listen_url=%s",
+        relay.get("pid"),
+        relay.get("running"),
+        listen_url,
+    )
+    state["relay"] = _start_proxy_relay(
+        listen_url=listen_url,
+        target_url=target_url,
+        stream_title=state.get("title", ""),
+        audio_mode=(relay.get("audio_mode") or state.get("audio_mode")),
+        rotation=(relay.get("rotation") or state.get("rotation")),
+        fps_mode=(relay.get("fps_mode") or state.get("fps_mode")),
+        overlay=load_overlay_state(),
+    )
+    save_stream_state(state)
+    return load_stream_state()
+
+
 def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
     title = (title or "").strip() or _default_stream_title()
     audio_mode = normalize_audio_mode(audio_mode)
