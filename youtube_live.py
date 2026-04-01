@@ -1152,16 +1152,6 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode,
         "1",
         "-i",
         listen_url,
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-ar",
-        "44100",
-        "-ac",
-        "1",
-        "-af",
-        _relay_audio_filter(),
     ]
     if overlay_active:
         argv.extend(
@@ -1203,6 +1193,20 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode,
         )
     else:
         argv.extend(["-map", "0:v?", "-map", "0:a?"])
+    argv.extend(
+        [
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            "-af",
+            _relay_audio_filter(),
+        ]
+    )
     if video_filters or overlay_active:
         video_encoder = _resolve_proxy_video_encoder()
         argv.extend(
