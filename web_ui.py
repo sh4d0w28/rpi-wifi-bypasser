@@ -36,6 +36,7 @@ APP.secret_key = os.environ.get("FLASK_SECRET", "rpi-ap-tools")
 
 WLAN_IFACE = os.environ.get("WLAN1_IFACE", "wlan1")
 HOSTAPD_CONF = Path(os.environ.get("HOSTAPD_CONF", "/etc/hostapd/hostapd.conf"))
+AP_CONFIG_FILE = Path(os.environ.get("AP_CONFIG_FILE", "/etc/default/rpi_ap_tools_ap"))
 WIFI_DB_PATH = Path(os.environ.get("WIFI_DB_PATH", "/etc/rpi_ap_tools_wifi_db.json"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
@@ -52,6 +53,22 @@ OVERLAY_RENDERER_THREAD = None
 
 def run(cmd, check=True):
     return subprocess.run(cmd, text=True, capture_output=True, check=check)
+
+
+def read_config_value(path, key, default=""):
+    if not path.exists():
+        return default
+    try:
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            current_key, value = stripped.split("=", 1)
+            if current_key.strip() == key:
+                return value.strip().strip("'\"") or default
+    except Exception:
+        return default
+    return default
 
 
 def load_wifi_db():
@@ -104,21 +121,20 @@ def get_ap_name():
         for line in HOSTAPD_CONF.read_text(encoding="utf-8", errors="ignore").splitlines():
             if line.strip().startswith("ssid="):
                 return line.split("=", 1)[1].strip()
-    result = run(
-        [
-            "nmcli",
-            "-t",
-            "-f",
-            "NAME,DEVICE,TYPE,802-11-wireless.ssid",
-            "connection",
-            "show",
-        ],
-        check=False,
-    )
-    for line in result.stdout.splitlines():
-        parts = line.split(":")
-        if len(parts) >= 4 and parts[1] == os.environ.get("WLAN0_IFACE", "wlan0") and parts[2] == "802-11-wireless" and parts[3]:
-            return parts[3]
+    wlan0 = os.environ.get("WLAN0_IFACE", "wlan0")
+    active = run(["nmcli", "-t", "-f", "GENERAL.CONNECTION", "device", "show", wlan0], check=False)
+    connection_name = ""
+    for line in active.stdout.splitlines():
+        if line.startswith("GENERAL.CONNECTION:"):
+            connection_name = line.split(":", 1)[1].strip()
+            break
+    if connection_name:
+        ssid = run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", connection_name], check=False).stdout.strip()
+        if ssid:
+            return ssid
+    configured = read_config_value(AP_CONFIG_FILE, "AP_SSID", "")
+    if configured:
+        return configured
     return "unknown"
 
 

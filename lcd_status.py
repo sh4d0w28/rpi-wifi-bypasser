@@ -15,15 +15,21 @@ from threading import Event, Lock, Thread
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+try:
+    import qrcode
+except Exception:
+    qrcode = None
 from youtube_live import (
+    DEFAULT_OVERLAY_HTML,
     YouTubeLiveError,
+    ensure_overlay_html_exists,
     get_auth_status,
     load_creation_state,
+    load_overlay_state,
     load_stream_state,
     poll_device_authorization,
-    set_proxy_audio_mode,
-    set_proxy_fps_mode,
-    set_proxy_rotation_mode,
+    refresh_proxy_overlay,
+    save_overlay_state,
     start_device_authorization,
     start_stream_creation,
 )
@@ -55,11 +61,13 @@ logging.basicConfig(
 WLAN_AP = os.environ.get("WLAN0_IFACE", "wlan0")
 WLAN_UP = os.environ.get("WLAN1_IFACE", "wlan1")
 HOSTAPD_CONF = Path(os.environ.get("HOSTAPD_CONF", "/etc/hostapd/hostapd.conf"))
+AP_CONFIG_FILE = Path(os.environ.get("AP_CONFIG_FILE", "/etc/default/rpi_ap_tools_ap"))
 REFRESH_SEC = float(os.environ.get("REFRESH_SEC", "2.0"))
 BUTTON_POLL_SEC = float(os.environ.get("BUTTON_POLL_SEC", "0.05"))
 DISPLAY_REFRESH_SEC = float(os.environ.get("DISPLAY_REFRESH_SEC", "0.5"))
-PROBE_INTERVAL_SEC = float(os.environ.get("PROBE_INTERVAL_SEC", "60.0"))
-NETWORK_FALLBACK_REFRESH_SEC = float(os.environ.get("NETWORK_FALLBACK_REFRESH_SEC", "30.0"))
+PROBE_INTERVAL_SEC = float(os.environ.get("PROBE_INTERVAL_SEC", "180.0"))
+NETWORK_FALLBACK_REFRESH_SEC = float(os.environ.get("NETWORK_FALLBACK_REFRESH_SEC", "60.0"))
+YOUTUBE_STATE_REFRESH_SEC = float(os.environ.get("YOUTUBE_STATE_REFRESH_SEC", "5.0"))
 STATUS_WRITE_SEC = float(os.environ.get("STATUS_WRITE_SEC", "5.0"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 UPDATE_SCRIPT_PATH = Path(os.environ.get("UPDATE_SCRIPT_PATH", "/home/pi/update_ap.sh"))
@@ -73,6 +81,8 @@ PORTAL_CAPTURE_MAX_BYTES = int(os.environ.get("PORTAL_CAPTURE_MAX_BYTES", str(10
 YOUTUBE_PING_HOST = os.environ.get("YOUTUBE_PING_HOST", "www.youtube.com")
 YOUTUBE_RTMP_HOST = os.environ.get("YOUTUBE_RTMP_HOST", "a.rtmp.youtube.com")
 YOUTUBE_RTMP_PORT = int(os.environ.get("YOUTUBE_RTMP_PORT", "1935"))
+YOUTUBE_PROXY_RTMP_PORT = int(os.environ.get("YOUTUBE_PROXY_RTMP_PORT", "7777") or "7777")
+YOUTUBE_PROXY_RTMP_APP = os.environ.get("YOUTUBE_PROXY_RTMP_APP", "live").strip().strip("/")
 PIN_UP = 6
 PIN_DOWN = 19
 PIN_LEFT = 5
@@ -111,26 +121,45 @@ def enqueue_button_event(name, is_pressed):
 def run(cmd):
     return subprocess.run(cmd, text=True, capture_output=True, check=False)
 
+
+def read_config_value(path, key, default=""):
+    if not path.exists():
+        return default
+    try:
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            current_key, value = stripped.split("=", 1)
+            if current_key.strip() == key:
+                return value.strip().strip("'\"") or default
+    except Exception:
+        return default
+    return default
+
 def read_ap_name():
     if HOSTAPD_CONF.exists():
         for line in HOSTAPD_CONF.read_text(encoding="utf-8", errors="ignore").splitlines():
             if line.strip().startswith("ssid="):
                 return line.split("=", 1)[1].strip()
-    proc = run(
-        [
-            "nmcli",
-            "-t",
-            "-f",
-            "NAME,DEVICE,TYPE,802-11-wireless.ssid",
-            "connection",
-            "show",
-        ]
-    )
-    for line in proc.stdout.splitlines():
-        parts = line.split(":")
-        if len(parts) >= 4 and parts[1] == WLAN_AP and parts[2] == "802-11-wireless" and parts[3]:
-            return parts[3]
+    active_proc = run(["nmcli", "-t", "-f", "GENERAL.CONNECTION", "device", "show", WLAN_AP])
+    connection_name = ""
+    for line in active_proc.stdout.splitlines():
+        if line.startswith("GENERAL.CONNECTION:"):
+            connection_name = line.split(":", 1)[1].strip()
+            break
+    if connection_name:
+        ssid_proc = run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", connection_name])
+        ssid = ssid_proc.stdout.strip()
+        if ssid:
+            return ssid
+    configured = read_config_value(AP_CONFIG_FILE, "AP_SSID", "")
+    if configured:
+        return configured
     return "unknown"
+
+def read_ap_password():
+    return read_config_value(AP_CONFIG_FILE, "AP_PASSWORD", "-")
 
 def read_ipv4(dev):
     proc = run(["ip", "-4", "-o", "addr", "show", "dev", dev])
@@ -298,6 +327,182 @@ def signal_color(signal):
 def draw_label_value(draw, x, y, label, value, value_fill="WHITE", gap=22):
     draw.text((x, y), label, font=FONT, fill=(140, 170, 210))
     draw.text((x + gap, y), value, font=FONT, fill=value_fill)
+
+
+def chrome_screen_id(state):
+    if state.get("ui_mode") == "home":
+        return "HOME"
+    if state.get("ui_mode") == "menu":
+        menu_id = (state.get("menu_id") or "root").lower()
+        return {
+            "youtube": "YT",
+            "youtube_create": "YT",
+            "youtube_create_audio": "YT",
+            "youtube_create_rotation": "YT",
+            "youtube_create_fps": "YT",
+            "update_confirm": "UPD",
+            "settings": "SET",
+            "root": "MENU",
+        }.get(menu_id, "MENU")
+    return {
+        "youtube": "YT",
+        "youtube_qr": "QR",
+        "settings": "SET",
+        "overview": "HOME",
+        "probe": "SET",
+    }.get(state.get("screen_id"), "MENU")
+
+
+def draw_chrome(draw, state):
+    screen_id = chrome_screen_id(state)
+    temp = state.get("cpu_temp")
+    cpu_pct = state.get("cpu_pct")
+    mem_pct = state.get("mem_pct")
+    temp_text = "--" if temp is None else f"{temp:.0f}"
+    cpu_text = "--" if cpu_pct is None else f"{cpu_pct:.0f}"
+    mem_text = "--" if mem_pct is None else f"{mem_pct:.0f}"
+
+    draw.rectangle((0, 0, 127, 15), fill=(16, 28, 16))
+    draw.line((0, 16, 127, 16), fill=(72, 120, 72), width=1)
+    draw.text((3, 4), screen_id, font=FONT, fill=(200, 255, 200))
+    draw.text((38, 4), f"T:{temp_text}", font=FONT, fill=metric_color(temp, 60, 75))
+    draw.text((70, 4), f"C:{cpu_text}", font=FONT, fill=metric_color(cpu_pct, 60, 85))
+    draw.text((101, 4), f"M:{mem_text}", font=FONT, fill=metric_color(mem_pct, 70, 85))
+
+    draw.line((0, 111, 127, 111), fill=(72, 120, 72), width=1)
+    draw.rectangle((0, 112, 127, 127), fill=(10, 18, 10))
+    draw.text((3, 117), "< BACK", font=FONT, fill=(180, 220, 180))
+    draw.text((48, 117), "OPEN", font=FONT, fill=(240, 255, 240))
+    draw.text((88, 117), "MENU >", font=FONT, fill=(180, 220, 180))
+
+
+def draw_qr_in_box(image, payload, box):
+    if not payload or qrcode is None:
+        return False
+    qr_image = qrcode.make(payload).convert("RGB")
+    x1, y1, x2, y2 = box
+    max_w = max(1, x2 - x1)
+    max_h = max(1, y2 - y1)
+    resampling = getattr(Image, "Resampling", Image)
+    qr_image.thumbnail((max_w, max_h), resampling.NEAREST)
+    offset_x = x1 + max(0, (max_w - qr_image.width) // 2)
+    offset_y = y1 + max(0, (max_h - qr_image.height) // 2)
+    image.paste(qr_image, (offset_x, offset_y))
+    return True
+
+
+def relay_probe_url():
+    app = f"/{YOUTUBE_PROXY_RTMP_APP}" if YOUTUBE_PROXY_RTMP_APP else ""
+    return f"rtmp://127.0.0.1:{YOUTUBE_PROXY_RTMP_PORT}{app}"
+
+
+def ffprobe_video_dimensions(url):
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0:s=x",
+                url,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=3,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    match = re.search(r"(\d{2,5})x(\d{2,5})", proc.stdout)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def relay_input_connected():
+    proc = run(["ss", "-ntp"])
+    if proc.returncode != 0:
+        return False
+    pattern = f":{YOUTUBE_PROXY_RTMP_PORT}"
+    for line in proc.stdout.splitlines():
+        if "ESTAB" in line and pattern in line and "ffmpeg" in line:
+            return True
+    return False
+
+
+def rotate_resolution_text(resolution_text, rotation):
+    match = re.match(r"^(\d{2,5})x(\d{2,5})$", str(resolution_text or "").strip())
+    if not match:
+        return resolution_text or "-"
+    width = int(match.group(1))
+    height = int(match.group(2))
+    if str(rotation) in ("90", "-90"):
+        width, height = height, width
+    return f"{width}x{height}"
+
+
+def overlay_static_template():
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; font-family: Arial, sans-serif; }
+    .wrap { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+    .card { padding: 24px 28px; border-radius: 22px; background: rgba(15,23,42,0.72); border: 2px solid rgba(125,211,252,0.95); color: #f8fafc; text-align: center; box-shadow: 0 12px 36px rgba(0,0,0,0.35); }
+    .eyebrow { font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase; color: #7dd3fc; }
+    .title { margin-top: 8px; font-size: 34px; font-weight: 700; }
+    .sub { margin-top: 8px; font-size: 18px; color: #cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="eyebrow">Overlay Demo</div>
+      <div class="title">STATIC PIC</div>
+      <div class="sub">RPi AP Tools</div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+
+def overlay_weather_template():
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; font-family: Arial, sans-serif; }
+    .panel { margin: 18px; padding: 18px 20px; width: 320px; border-radius: 24px; color: #eff6ff; background: linear-gradient(135deg, rgba(14,116,144,0.82), rgba(30,41,59,0.82)); border: 1px solid rgba(255,255,255,0.28); box-shadow: 0 14px 34px rgba(0,0,0,0.32); }
+    .top { display: flex; justify-content: space-between; align-items: baseline; }
+    .city { font-size: 20px; font-weight: 700; }
+    .temp { font-size: 42px; font-weight: 700; margin-top: 8px; }
+    .meta { margin-top: 10px; font-size: 16px; color: #dbeafe; }
+    .chip { margin-top: 14px; display: inline-block; padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.14); font-size: 15px; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <div class="top">
+      <div class="city">Bangkok Demo</div>
+      <div>WEATHER</div>
+    </div>
+    <div class="temp">31C</div>
+    <div class="meta">Partly cloudy</div>
+    <div class="chip">Example overlay template</div>
+  </div>
+</body>
+</html>
+"""
 
 
 def draw_hourglass(draw, center_x, center_y, *, fill=(240, 244, 255)):
@@ -539,68 +744,47 @@ def start_watchers():
         Thread(target=watch_command, args=(cmd, name), daemon=True).start()
 
 def render_overview(draw, state):
-    ap_ok = state["ap_ok"]
-    cl_ok = state["cl_ok"]
-    signal = state["signal"]
-    cpu_temp = state["cpu_temp"]
-    cpu_pct = state["cpu_pct"]
-    mem_pct = state["mem_pct"]
-
-    draw.text((3, 3), "AP", font=FONT, fill=(140, 170, 210))
-    draw.text((19, 3), "OK" if ap_ok else "NO", font=FONT, fill=((120, 255, 160) if ap_ok else (255, 96, 96)))
-    draw.text((46, 3), "CL", font=FONT, fill=(140, 170, 210))
-    draw.text((62, 3), "OK" if cl_ok else "NO", font=FONT, fill=((120, 255, 160) if cl_ok else (255, 96, 96)))
-    draw.text((90, 3), f"{signal}%" if signal != "-" else "--", font=FONT, fill=signal_color(signal))
-
-    draw.text((3, 22), fit_text(state["ap_name"], 20), font=FONT, fill=(240, 244, 255))
-    draw.text((3, 35), fit_text(state["active_wifi"]["name"], 20), font=FONT, fill=(120, 220, 255))
-
-    draw.line((2, 49, 125, 49), fill=(24, 44, 68), width=1)
-    draw_label_value(draw, 3, 54, "w0", fit_text(state["w0"], 15), (255, 255, 255), gap=18)
-    draw_label_value(draw, 3, 67, "w1", fit_text(state["w1"], 15), (255, 255, 255), gap=18)
-
-    draw.line((2, 81, 125, 81), fill=(24, 44, 68), width=1)
-    draw_label_value(draw, 3, 86, "RX", f"{human_bytes(state['rx1ps'])}/s", (120, 255, 160), gap=18)
-    draw_label_value(draw, 3, 99, "TX", f"{human_bytes(state['tx1ps'])}/s", (255, 210, 90), gap=18)
-
-    draw.line((2, 113, 125, 113), fill=(24, 44, 68), width=1)
-    temp_text = "-" if cpu_temp is None else f"{cpu_temp:.0f}C"
-    cpu_text = "-" if cpu_pct is None else f"{cpu_pct:.0f}%"
-    mem_text = "-" if mem_pct is None else f"{mem_pct:.0f}%"
-    draw.text((3, 117), "T", font=FONT, fill=(140, 170, 210))
-    draw.text((13, 117), temp_text, font=FONT, fill=metric_color(cpu_temp, 60, 75))
-    draw.text((43, 117), "C", font=FONT, fill=(140, 170, 210))
-    draw.text((53, 117), cpu_text, font=FONT, fill=metric_color(cpu_pct, 60, 85))
-    draw.text((83, 117), "M", font=FONT, fill=(140, 170, 210))
-    draw.text((93, 117), mem_text, font=FONT, fill=metric_color(mem_pct, 70, 85))
+    rows = [
+        ("AP", fit_text(state["ap_name"], 16), (240, 244, 255)),
+        ("IP", fit_text(state["w0"], 16), (120, 220, 255)),
+        ("W1", fit_text(state["active_wifi"]["name"], 16), (240, 244, 255)),
+        ("IP", fit_text(state["w1"], 16), (120, 220, 255)),
+        ("SIG", f"{state['signal']}%" if state["signal"] != "-" else "--", signal_color(state["signal"])),
+        ("TXR", fit_text(f"{human_bytes(state['tx1ps'])}/{human_bytes(state['rx1ps'])}", 14), (255, 210, 90)),
+    ]
+    y = 22
+    for label, value, fill in rows:
+        draw.text((4, y), label, font=FONT, fill=(140, 170, 210))
+        draw.text((27, y), value, font=FONT, fill=fill)
+        y += 14
 
 def render_probe(draw, state):
     probe = state["probe"]
-    draw.text((3, 3), "PROBE", font=FONT, fill=(140, 170, 210))
-    draw.text((3, 20), fit_text(state["active_wifi"]["name"], 20), font=FONT, fill=(120, 220, 255))
-    draw.text((3, 33), f"IP {fit_text(state['w1'], 16)}", font=FONT, fill=(240, 244, 255))
-
-    draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
     yt_text = "-" if probe["youtube_ping_ms"] is None else f"{probe['youtube_ping_ms']:.0f}ms"
     rtmp_text = "-" if probe["youtube_rtmp_ms"] is None else f"{probe['youtube_rtmp_ms']:.0f}ms"
-    draw_label_value(draw, 3, 54, "YT", yt_text, (120, 220, 255), gap=18)
-    draw_label_value(draw, 64, 54, "RT", rtmp_text, (255, 210, 90), gap=18)
-    draw_label_value(draw, 3, 67, "NET", fit_text(probe["connectivity"], 12), (240, 244, 255), gap=24)
-
     portal_fill = (255, 210, 90) if probe["portal_suspected"] else (120, 255, 160) if probe["internet_ok"] else (255, 96, 96)
     portal_text = "PORTAL" if probe["portal_suspected"] else "ONLINE" if probe["internet_ok"] else "OFFLINE"
-    draw.text((3, 82), portal_text, font=FONT, fill=portal_fill)
-    ack_hint = "MENU ACK" if state["portal_ack_configured"] else "no-ack"
-    draw.text((58, 82), ack_hint, font=FONT, fill=(180, 180, 180))
+    rows = [
+        ("W1", fit_text(state["active_wifi"]["name"], 16), (120, 220, 255)),
+        ("IP", fit_text(state["w1"], 16), (240, 244, 255)),
+        ("YT", yt_text, (120, 220, 255)),
+        ("RT", rtmp_text, (255, 210, 90)),
+        ("NET", fit_text(probe["connectivity"], 14), (240, 244, 255)),
+        ("STS", portal_text, portal_fill),
+    ]
+    y = 22
+    for label, value, fill in rows:
+        draw.text((4, y), label, font=FONT, fill=(140, 170, 210))
+        draw.text((27, y), value, font=FONT, fill=fill)
+        y += 14
 
     if state["portal_ack_last"]:
-        msg = fit_text(state["portal_ack_last"]["message"], 20)
+        msg = fit_text(state["portal_ack_last"]["message"], 18)
         fill = (120, 255, 160) if state["portal_ack_last"]["ok"] else (255, 96, 96)
-        draw.text((3, 96), msg, font=FONT, fill=fill)
+        draw.text((4, 95), msg, font=FONT, fill=fill)
 
 def render_youtube(draw, image, state):
     youtube = state["youtube"]
-    probe = state["probe"]
     creating = (youtube.get("creation") or {}).get("status") == "creating"
     if creating:
         creation = youtube.get("creation") or {}
@@ -619,49 +803,73 @@ def render_youtube(draw, image, state):
         draw.rectangle((bar_left, bar_top, bar_right, bar_bottom), outline=(255, 170, 170), width=1)
         draw.rectangle((bar_left + 1, bar_top + 1, bar_left + 1 + fill_width, bar_bottom - 1), fill=(255, 96, 96))
         draw.text((44, 91), f"{progress_pct:3d}%", font=FONT, fill=(255, 230, 230))
-        draw.text((22, 119), "LEFT BACK", font=FONT, fill=(180, 180, 180))
         return
 
     if youtube.get("auth_required") and not youtube.get("qr_payload"):
         draw.rectangle((4, 22, 123, 104), outline=(255, 96, 96), width=2)
         draw.rectangle((8, 26, 119, 100), outline=(255, 96, 96), width=1)
-        draw.text((22, 40), "AUTH", font=FONT, fill=(255, 230, 230))
-        draw.text((22, 56), "FIRST", font=FONT, fill=(255, 230, 230))
-        draw.text((14, 78), fit_text(youtube.get("status_message", "AUTH FIRST"), 16), font=FONT, fill=(255, 210, 210))
-        draw.text((16, 119), "PRESS AUTH L BK", font=FONT, fill=(180, 180, 180))
+        draw.text((22, 36), "AUTH", font=FONT, fill=(255, 230, 230))
+        draw.text((22, 50), "FIRST", font=FONT, fill=(255, 230, 230))
+        draw.text((12, 70), fit_text(youtube.get("status_message", "AUTH FIRST"), 18), font=FONT, fill=(255, 210, 210))
         return
 
-    draw.text((3, 3), "YOUTUBE", font=FONT, fill=(140, 170, 210))
-    auth_text = "READY" if youtube["auth"].get("authorized") else "PENDING" if youtube["auth"].get("device_pending") else "SETUP"
-    auth_fill = (120, 255, 160) if auth_text == "READY" else (255, 210, 90) if auth_text == "PENDING" else (255, 96, 96)
-    draw.text((72, 3), auth_text, font=FONT, fill=auth_fill)
-    draw.text((3, 20), fit_text(youtube.get("title", "No stream yet"), 20), font=FONT, fill=(240, 244, 255))
-    draw.text((3, 33), fit_text(f"ROT {youtube.get('rotation_short', 'OFF')}", 10), font=FONT, fill=(255, 210, 90))
-    draw.text((60, 33), fit_text(f"FPS {youtube.get('fps_mode_short', 'ORIG')}", 10), font=FONT, fill=(120, 220, 255))
-    draw.text((3, 41), fit_text(f"AUD {youtube.get('audio_mode_short', 'NORM')}", 20), font=FONT, fill=(120, 255, 160))
-    draw.line((2, 48, 125, 48), fill=(24, 44, 68), width=1)
-    relay = youtube.get("relay") or {}
-    res_text = "-"
-    if relay.get("video_width") and relay.get("video_height"):
-        res_text = f"{relay.get('video_width')}x{relay.get('video_height')}"
-    bitrate_text = relay.get("video_bitrate_text", "-")
-    rt_text = "-" if probe.get("youtube_rtmp_ms") is None else f"{probe.get('youtube_rtmp_ms'):.0f}ms"
-    latency_text = "-" if probe.get("youtube_ping_ms") is None else f"{probe.get('youtube_ping_ms'):.0f}ms"
-    draw.text((3, 54), fit_text(f"RT {rt_text} LAT {latency_text}", 20), font=FONT, fill=(240, 244, 255))
-    draw.text((3, 67), fit_text(f"BR {bitrate_text}", 20), font=FONT, fill=(120, 220, 255))
-    draw.text((3, 80), fit_text(f"RES {res_text}", 20), font=FONT, fill=(255, 210, 90))
     if youtube["auth"].get("device_pending"):
         device = youtube["auth"].get("device") or {}
         code = device.get("user_code", "")
         verify = device.get("verification_url", "") or device.get("verification_url_complete", "")
-        draw.text((3, 93), fit_text(f"CODE {code}", 20), font=FONT, fill=(255, 210, 90))
-        draw.text((3, 104), fit_text(verify.replace("https://", ""), 20), font=FONT, fill=(120, 220, 255))
+        draw.text((4, 22), "AUTH PENDING", font=FONT, fill=(255, 210, 90))
+        draw.text((4, 37), fit_text(f"Code {code}", 18), font=FONT, fill=(240, 244, 255))
+        draw.text((4, 51), fit_text(verify.replace("https://", ""), 18), font=FONT, fill=(120, 220, 255))
+        draw.text((4, 79), "PRESS=CHECK", font=FONT, fill=(240, 244, 255))
         return
-    draw.text((3, 93), fit_text(youtube.get("status_message", "Use YT menu"), 20), font=FONT, fill=(240, 244, 255))
-    if not youtube["auth"].get("authorized"):
-        draw.text((12, 101), "PRESS=AUTH LEFT=BK", font=FONT, fill=(180, 180, 180))
-    else:
-        draw.text((18, 101), "LEFT=BACK", font=FONT, fill=(180, 180, 180))
+
+    incoming = youtube.get("incoming_res") or "-"
+    outgoing = youtube.get("outgoing_res") or incoming
+    overlay_text = "Active" if youtube.get("overlay_enabled") else "Off"
+    rows = [
+        ("Name", fit_text(youtube.get("title", "No stream"), 16), (240, 244, 255)),
+        ("RTMP", fit_text(youtube.get("rtmp_summary", "-"), 14), (120, 220, 255)),
+        ("Rot", youtube.get("rotation_short", "OFF"), (255, 210, 90)),
+        ("FPS", youtube.get("fps_mode_short", "ORIG"), (120, 255, 160)),
+        ("In", incoming, (240, 244, 255)),
+        ("Out", outgoing, (120, 220, 255)),
+        ("Ovl", overlay_text, (255, 210, 90) if youtube.get("overlay_enabled") else (180, 180, 180)),
+    ]
+    y = 22
+    for label, value, fill in rows:
+        if y > 102:
+            break
+        draw.text((4, y), label, font=FONT, fill=(140, 170, 210))
+        value_x = 34 if len(label) >= 4 else 27
+        max_chars = 14 if label in ("Name", "RTMP") else 16
+        draw.text((value_x, y), fit_text(str(value), max_chars), font=FONT, fill=fill)
+        y += 12
+
+
+def render_youtube_qr(draw, image, state):
+    payload = state.get("youtube", {}).get("qr_payload", "")
+    if draw_qr_in_box(image, payload, (18, 24, 110, 102)):
+        draw.rectangle((16, 22, 112, 104), outline=(255, 255, 255))
+        draw.text((36, 98), "STREAM QR", font=FONT, fill=(240, 244, 255))
+        return
+    draw.rectangle((8, 30, 119, 96), outline=(90, 180, 90))
+    draw.text((22, 46), "NO STREAM", font=FONT, fill=(240, 244, 255))
+    draw.text((18, 60), "QR UNAVAILABLE", font=FONT, fill=(180, 180, 180))
+
+
+def render_settings(draw, state):
+    rows = [
+        ("RTMP", fit_text(state.get("settings_rtmp", "-"), 14), (120, 220, 255)),
+        ("Rot", state.get("settings_rotation", "0"), (255, 210, 90)),
+        ("FPS", state.get("settings_fps", "ORIG"), (120, 255, 160)),
+        ("Snd", state.get("settings_audio", "NORM"), (240, 244, 255)),
+        ("Pass", fit_text(state.get("ap_password", "-"), 14), (255, 210, 90)),
+    ]
+    y = 24
+    for label, value, fill in rows:
+        draw.text((4, y), label, font=FONT, fill=(140, 170, 210))
+        draw.text((30, y), value, font=FONT, fill=fill)
+        y += 15
 
 def render_portal_warning(draw, state):
     if not state["probe"].get("auth_required"):
@@ -702,33 +910,19 @@ def render_matrix(draw, state):
 
 
 def render_home(draw, state):
-    ap_name = fit_text(state.get("ap_name", "-"), 16)
-    wifi_name = fit_text((state.get("active_wifi") or {}).get("name", "-"), 16)
-    signal = state.get("signal", "-")
-    cpu_pct = state.get("cpu_pct")
-    cpu_text = "--" if cpu_pct is None else f"{cpu_pct:.0f}%"
-    temp = state.get("cpu_temp")
-    temp_text = "--" if temp is None else f"{temp:.0f}C"
-    mode_text = "DIRECT"
-    if state.get("youtube", {}).get("mode") == "proxy":
-        mode_text = state["youtube"].get("audio_mode_short", "NORM")
-
-    draw.rectangle((0, 0, 127, 127), fill="BLACK")
-    draw.rectangle((0, 0, 127, 18), fill=(18, 46, 18))
-    draw.line((0, 19, 127, 19), fill=(90, 180, 90), width=1)
-    draw.text((4, 5), "HOME", font=FONT, fill=(200, 255, 200))
-    draw.text((92, 5), "MENU", font=FONT, fill=(120, 200, 120))
-
-    draw.rectangle((6, 28, 121, 88), outline=(40, 120, 40), width=1)
-    draw.rectangle((10, 32, 117, 84), outline=(24, 72, 24), width=1)
-    draw.text((16, 37), fit_text(ap_name.upper(), 14), font=FONT, fill=(240, 255, 240))
-    draw.text((16, 51), fit_text(wifi_name, 16), font=FONT, fill=(120, 220, 255))
-    draw.text((16, 65), fit_text(f"SIG {signal}%", 14) if signal != "-" else "SIG --", font=FONT, fill=signal_color(signal))
-
-    draw.text((8, 96), fit_text(f"YT {mode_text}", 10), font=FONT, fill=(255, 210, 90))
-    draw.text((66, 96), fit_text(f"CPU {cpu_text}", 10), font=FONT, fill=metric_color(cpu_pct, 60, 85))
-    draw.text((8, 108), fit_text(f"TEMP {temp_text}", 12), font=FONT, fill=metric_color(temp, 60, 75))
-    draw.text((8, 120), "PRESS CENTER", font=FONT, fill=(180, 220, 180))
+    rows = [
+        ("AP", fit_text(state.get("ap_name", "-"), 16), (240, 255, 240)),
+        ("IP", fit_text(state.get("w0", "-"), 16), (120, 220, 255)),
+        ("W1", fit_text((state.get("active_wifi") or {}).get("name", "-"), 16), (240, 244, 255)),
+        ("IP", fit_text(state.get("w1", "-"), 16), (120, 220, 255)),
+        ("SIG", f"{state.get('signal')}%" if state.get("signal") != "-" else "--", signal_color(state.get("signal"))),
+        ("TXR", fit_text(f"{human_bytes(state['tx1ps'])}/{human_bytes(state['rx1ps'])}", 14), (255, 210, 90)),
+    ]
+    y = 22
+    for label, value, fill in rows:
+        draw.text((4, y), label, font=FONT, fill=(140, 170, 210))
+        draw.text((27, y), value, font=FONT, fill=fill)
+        y += 14
 
 
 def render_game_pong(draw, state):
@@ -773,14 +967,10 @@ def render_menu(draw, state):
     else:
         selected = 0
 
-    draw.rectangle((0, 0, 127, 127), fill="BLACK")
-    draw.rectangle((0, 0, 127, 15), fill=(0, 24, 0))
-    draw.line((0, 16, 127, 16), fill=(0, 72, 0), width=1)
-    draw.text((3, 3), title, font=FONT, fill=(160, 255, 160))
-    draw.text((88, 3), "MENU", font=FONT, fill=(120, 180, 120))
+    draw.text((4, 22), title, font=FONT, fill=(160, 255, 160))
 
     visible_rows = 6
-    row_height = 14
+    row_height = 12
     top_index = 0
     if len(items) > visible_rows:
         top_index = max(0, min(selected - (visible_rows - 1), len(items) - visible_rows))
@@ -790,7 +980,7 @@ def render_menu(draw, state):
         if idx >= len(items):
             break
         item = items[idx]
-        y = 20 + (row * row_height)
+        y = 35 + (row * row_height)
         is_selected = idx == selected
         label = item.get("label", "-")
         if item.get("checked"):
@@ -804,8 +994,7 @@ def render_menu(draw, state):
 
     message = fit_text(state.get("menu_message", ""), 20)
     if message:
-        draw.text((3, 106), message, font=FONT, fill=(255, 210, 90))
-    draw.text((18, 119), "P OK L BK", font=FONT, fill=(120, 180, 120))
+        draw.text((4, 101), message, font=FONT, fill=(255, 210, 90))
 
 
 def render_selector_popup(draw, state):
@@ -814,9 +1003,9 @@ def render_selector_popup(draw, state):
     if not items:
         return
 
-    draw.rectangle((8, 20, 119, 107), fill=(6, 20, 6), outline=(90, 180, 90))
-    draw.rectangle((12, 24, 115, 43), fill=(0, 24, 0), outline=(36, 96, 36))
-    draw.text((16, 30), fit_text(selector.get("title", "Select").upper(), 14), font=FONT, fill=(180, 255, 180))
+    draw.rectangle((8, 22, 119, 107), fill=(6, 20, 6), outline=(90, 180, 90))
+    draw.rectangle((12, 26, 115, 45), fill=(0, 24, 0), outline=(36, 96, 36))
+    draw.text((16, 32), fit_text(selector.get("title", "Select").upper(), 14), font=FONT, fill=(180, 255, 180))
 
     selected = max(0, min(selector.get("selected", 0), len(items) - 1))
     visible_rows = 4
@@ -829,7 +1018,7 @@ def render_selector_popup(draw, state):
         if idx >= len(items):
             break
         item = items[idx]
-        y = 49 + (row * 12)
+        y = 51 + (row * 12)
         is_selected = idx == selected
         fill = (240, 255, 240) if not item.get("disabled") else (150, 150, 150)
         if is_selected:
@@ -841,12 +1030,12 @@ def render_selector_popup(draw, state):
 
     value_text = fit_text(selector.get("value_text", ""), 16)
     if value_text:
-        draw.text((18, 100), value_text, font=FONT, fill=(255, 210, 90))
-    draw.text((20, 112), "P OK  L BK", font=FONT, fill=(120, 180, 120))
+        draw.text((18, 96), value_text, font=FONT, fill=(255, 210, 90))
 
 def render_screen(lcd, state):
     image = Image.new("RGB", (128, 128), "BLACK")
     draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, 127, 127), fill="BLACK")
 
     if state.get("ui_mode") == "home":
         render_home(draw, state)
@@ -860,23 +1049,21 @@ def render_screen(lcd, state):
             render_selector_popup(draw, state)
         else:
             render_menu(draw, state)
-    elif state["screen_id"] == "matrix":
-        render_matrix(draw, state)
-    elif state["screen_id"] == "game_pong":
-        render_game_pong(draw, state)
-    elif state["screen_id"] == "game_catch":
-        render_game_catch(draw, state)
     elif state.get("ui_mode") == "screen":
-        draw.rectangle((0, 0, 127, 127), fill="BLACK")
-        draw.rectangle((0, 0, 127, 15), fill=(18, 18, 18))
-        draw.line((0, 16, 127, 16), fill=(64, 64, 64), width=1)
+        pass
+    if state.get("ui_mode") in ("home", "menu", "screen"):
+        draw_chrome(draw, state)
     if state.get("ui_mode") == "screen" and state["screen_id"] == "overview":
         render_overview(draw, state)
     elif state.get("ui_mode") == "screen" and state["screen_id"] == "probe":
         render_probe(draw, state)
     elif state.get("ui_mode") == "screen" and state["screen_id"] == "youtube":
         render_youtube(draw, image, state)
-    if state.get("ui_mode") == "screen" and state["screen_id"] in ("overview", "probe", "youtube"):
+    elif state.get("ui_mode") == "screen" and state["screen_id"] == "youtube_qr":
+        render_youtube_qr(draw, image, state)
+    elif state.get("ui_mode") == "screen" and state["screen_id"] == "settings":
+        render_settings(draw, state)
+    if state.get("ui_mode") == "screen" and state["screen_id"] in ("overview", "probe", "youtube", "settings"):
         render_portal_warning(draw, state)
     render_busy_overlay(draw, state)
 
@@ -916,6 +1103,7 @@ def main():
     curr = prev
     button_states_prev = {name: False for name in BUTTON_PINS}
     ap_name = read_ap_name()
+    ap_password = read_ap_password()
     w0 = ip_only(read_ipv4(WLAN_AP))
     w1 = ip_only(read_ipv4(WLAN_UP))
     active_wifi = read_active_wifi()
@@ -955,6 +1143,9 @@ def main():
     last_status_write_at = 0.0
     last_display_signature = None
     last_status_signature = None
+    live_input_res = "-"
+    live_output_res = "-"
+    state_lock = Lock()
     matrix_columns = [
         {
             "x": idx * MATRIX_FONT_W,
@@ -980,9 +1171,6 @@ def main():
             "youtube_create_audio",
             "youtube_create_rotation",
             "youtube_create_fps",
-            "youtube_manage_audio",
-            "youtube_manage_rotation",
-            "youtube_manage_fps",
         }
 
     def menu_definition_for(menu_id, selected=0):
@@ -1002,95 +1190,165 @@ def main():
     def selector_value_text(menu_id):
         if menu_id.startswith("youtube_create_"):
             return "NEXT STREAM"
-        if menu_id.startswith("youtube_manage_"):
-            return "LIVE STREAM"
         return fit_text(ui_message or "", 16)
 
+    def rtmp_summary_text():
+        stream_url = youtube_stream.get("proxy_publish_url") or youtube_stream.get("target_url") or ""
+        if stream_url:
+            return stream_url.replace("rtmp://", "").replace("rtmps://", "")
+        if YOUTUBE_PROXY_RTMP_APP:
+            return f".../{YOUTUBE_PROXY_RTMP_APP}"
+        return "rtmp://-"
+
+    def stream_resolution_text():
+        relay = youtube_stream.get("relay") or {}
+        width = relay.get("video_width")
+        height = relay.get("video_height")
+        if width and height:
+            return f"{width}x{height}"
+        return "-"
+
+    def stream_input_resolution_text():
+        value = stream_resolution_text()
+        if value != "-":
+            return value
+        return live_input_res
+
+    def stream_output_resolution_text():
+        incoming = stream_input_resolution_text()
+        if incoming == "-":
+            return live_output_res
+        return rotate_resolution_text(incoming, youtube_stream.get("rotation", "0"))
+
+    def default_create_settings():
+        audio = youtube_creation.get("audio_mode") or youtube_stream.get("audio_mode", "normal")
+        rotation = youtube_creation.get("rotation") or youtube_stream.get("rotation", "0")
+        fps = youtube_creation.get("fps_mode") or youtube_stream.get("fps_mode", "original")
+        return audio, rotation, fps
+
+    def allow_restart_auth():
+        if youtube_auth.get("device_pending"):
+            return True
+        if youtube_auth.get("authorized") and not probe_cache.get("auth_required"):
+            return False
+        return bool(youtube_status_message and youtube_status_message not in ("Use YT menu", "AUTH FIRST"))
+
+    def apply_overlay_demo(template_name):
+        overlay = load_overlay_state()
+        overlay["enabled"] = template_name != "off"
+        overlay["x"] = 36
+        overlay["y"] = 36
+        overlay["width"] = 420
+        overlay["height"] = 240
+        overlay["opacity"] = 1.0
+        overlay["refresh_sec"] = 5
+        save_overlay_state(overlay)
+        ensure_overlay_html_exists()
+        html_path = Path(overlay.get("html_path") or "")
+        if template_name == "static":
+            html = overlay_static_template()
+        elif template_name == "weather":
+            html = overlay_weather_template()
+        elif template_name == "default":
+            html = DEFAULT_OVERLAY_HTML
+        else:
+            html = DEFAULT_OVERLAY_HTML
+        if template_name != "off" and html_path:
+            html_path.parent.mkdir(parents=True, exist_ok=True)
+            html_path.write_text(html, encoding="utf-8")
+        try:
+            refresh_proxy_overlay()
+            set_ui_message(f"Overlay {template_name}")
+        except YouTubeLiveError:
+            set_ui_message(f"Overlay {template_name} saved")
+
     def compose_state(now):
-        menu_title, menu_items = current_menu_definition()
-        menu_selected = current_menu_entry()["selected"]
-        modal_selector = None
-        menu_base_title = menu_title
-        menu_base_items = menu_items
-        menu_base_selected = menu_selected
-        if ui_mode == "menu" and current_menu_entry()["id"] in selector_menu_ids() and len(menu_stack) > 1:
-            parent_entry = menu_stack[-2]
-            menu_base_title, menu_base_items, menu_base_selected = menu_definition_for(
-                parent_entry["id"],
-                parent_entry.get("selected", 0),
-            )
-            modal_selector = {
-                "title": menu_title,
-                "items": menu_items,
-                "selected": menu_selected,
-                "value_text": selector_value_text(current_menu_entry()["id"]),
+        with state_lock:
+            menu_title, menu_items = current_menu_definition()
+            menu_selected = current_menu_entry()["selected"]
+            modal_selector = None
+            menu_base_title = menu_title
+            menu_base_items = menu_items
+            menu_base_selected = menu_selected
+            if ui_mode == "menu" and current_menu_entry()["id"] in selector_menu_ids() and len(menu_stack) > 1:
+                parent_entry = menu_stack[-2]
+                menu_base_title, menu_base_items, menu_base_selected = menu_definition_for(
+                    parent_entry["id"],
+                    parent_entry.get("selected", 0),
+                )
+                modal_selector = {
+                    "title": menu_title,
+                    "items": menu_items,
+                    "selected": menu_selected,
+                    "value_text": selector_value_text(current_menu_entry()["id"]),
+                }
+            return {
+                "ui_mode": ui_mode,
+                "screen_id": current_screen,
+                "menu_id": current_menu_entry()["id"],
+                "screen_title": {
+                    "overview": "Overview",
+                    "probe": "Probe",
+                    "youtube": "YouTube",
+                    "youtube_qr": "Stream QR",
+                    "settings": "Settings",
+                }.get(current_screen, "Menu"),
+                "menu_title": menu_title,
+                "menu_items": menu_items,
+                "menu_selected": menu_selected,
+                "menu_base_title": menu_base_title,
+                "menu_base_items": menu_base_items,
+                "menu_base_selected": menu_base_selected,
+                "modal_selector": modal_selector,
+                "menu_message": ui_message,
+                "busy_action": busy_action,
+                "ap_name": ap_name,
+                "w0": w0,
+                "w1": w1,
+                "active_wifi": active_wifi,
+                "cpu_temp": cpu_temp,
+                "cpu_pct": cpu_pct,
+                "mem_pct": mem_pct,
+                "rx1ps": rx1ps,
+                "tx1ps": tx1ps,
+                "ap_ok": ap_ok,
+                "cl_ok": cl_ok,
+                "signal": signal,
+                "probe": probe_cache,
+                "portal_ack_configured": bool(CAPTIVE_PORTAL_ACK_CMD),
+                "portal_ack_last": portal_ack_last,
+                "youtube": {
+                    "auth": youtube_auth,
+                    "title": youtube_stream.get("title", ""),
+                    "watch_url": youtube_stream.get("watch_url", ""),
+                    "qr_payload": youtube_stream.get("qr_payload", ""),
+                    "mode": youtube_stream.get("mode", "direct"),
+                    "audio_mode": youtube_stream.get("audio_mode", "normal"),
+                    "audio_mode_label": youtube_stream.get("audio_mode_label", "Normal"),
+                    "audio_mode_short": youtube_stream.get("audio_mode_short", "NORM"),
+                    "rotation": youtube_stream.get("rotation", "0"),
+                    "rotation_short": youtube_stream.get("rotation_short", "OFF"),
+                    "fps_mode": youtube_stream.get("fps_mode", "original"),
+                    "fps_mode_short": youtube_stream.get("fps_mode_short", "ORIG"),
+                    "relay": youtube_stream.get("relay", {}),
+                    "incoming_res": stream_input_resolution_text(),
+                    "outgoing_res": stream_output_resolution_text(),
+                    "overlay_enabled": bool((youtube_stream.get("relay") or {}).get("overlay_enabled")),
+                    "rtmp_summary": rtmp_summary_text(),
+                    "creation": youtube_creation,
+                    "create_audio_short": {"normal": "NORM", "voice": "VOICE", "mute": "MUTE"}.get(youtube_create_audio_mode, youtube_create_audio_mode.upper()),
+                    "create_rotation_short": {"0": "OFF", "90": "+90", "-90": "-90"}.get(youtube_create_rotation, youtube_create_rotation),
+                    "create_fps_short": {"original": "ORIG", "30": "30FPS", "20": "20FPS"}.get(youtube_create_fps_mode, youtube_create_fps_mode.upper()),
+                    "status_message": youtube_status_message if youtube_auth.get("device_pending") else "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
+                    "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),
+                },
+                "settings_rtmp": rtmp_summary_text(),
+                "settings_rotation": {"0": "OFF", "90": "+90", "-90": "-90"}.get(youtube_create_rotation, youtube_create_rotation),
+                "settings_fps": {"original": "ORIG", "30": "30FPS", "20": "20FPS"}.get(youtube_create_fps_mode, youtube_create_fps_mode.upper()),
+                "settings_audio": {"normal": "NORM", "voice": "VOICE", "mute": "MUTE"}.get(youtube_create_audio_mode, youtube_create_audio_mode.upper()),
+                "ap_password": ap_password,
+                "updated_at": now,
             }
-        return {
-            "ui_mode": ui_mode,
-            "screen_id": current_screen,
-            "screen_title": {
-                "overview": "Overview",
-                "probe": "Probe",
-                "youtube": "YouTube",
-                "matrix": "Matrix",
-                "game_pong": "Pong",
-                "game_catch": "Catch",
-            }.get(current_screen, "Menu"),
-            "menu_title": menu_title,
-            "menu_items": menu_items,
-            "menu_selected": menu_selected,
-            "menu_base_title": menu_base_title,
-            "menu_base_items": menu_base_items,
-            "menu_base_selected": menu_base_selected,
-            "modal_selector": modal_selector,
-            "menu_message": ui_message,
-            "busy_action": busy_action,
-            "ap_name": ap_name,
-            "w0": w0,
-            "w1": w1,
-            "active_wifi": active_wifi,
-            "cpu_temp": cpu_temp,
-            "cpu_pct": cpu_pct,
-            "mem_pct": mem_pct,
-            "rx1ps": rx1ps,
-            "tx1ps": tx1ps,
-            "ap_ok": ap_ok,
-            "cl_ok": cl_ok,
-            "signal": signal,
-            "probe": probe_cache,
-            "portal_ack_configured": bool(CAPTIVE_PORTAL_ACK_CMD),
-            "portal_ack_last": portal_ack_last,
-            "youtube": {
-                "auth": youtube_auth,
-                "title": youtube_stream.get("title", ""),
-                "watch_url": youtube_stream.get("watch_url", ""),
-                "qr_payload": youtube_stream.get("qr_payload", ""),
-                "mode": youtube_stream.get("mode", "direct"),
-                "audio_mode": youtube_stream.get("audio_mode", "normal"),
-                "audio_mode_label": youtube_stream.get("audio_mode_label", "Normal"),
-                "audio_mode_short": youtube_stream.get("audio_mode_short", "NORM"),
-                "rotation": youtube_stream.get("rotation", "0"),
-                "rotation_short": youtube_stream.get("rotation_short", "OFF"),
-                "fps_mode": youtube_stream.get("fps_mode", "original"),
-                "fps_mode_short": youtube_stream.get("fps_mode_short", "ORIG"),
-                "relay": youtube_stream.get("relay", {}),
-                "creation": youtube_creation,
-                "create_audio_short": {"normal": "NORM", "voice": "VOICE", "mute": "MUTE"}.get(youtube_create_audio_mode, youtube_create_audio_mode.upper()),
-                "create_rotation_short": {"0": "OFF", "90": "+90", "-90": "-90"}.get(youtube_create_rotation, youtube_create_rotation),
-                "create_fps_short": {"original": "ORIG", "30": "30FPS", "20": "20FPS"}.get(youtube_create_fps_mode, youtube_create_fps_mode.upper()),
-                "status_message": youtube_status_message if youtube_auth.get("device_pending") else "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
-                "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),
-            },
-            "matrix": {
-                "columns": matrix_columns,
-                "tick": matrix_tick,
-            },
-            "games": {
-                "pong": pong_game,
-                "catch": catch_game,
-            },
-            "updated_at": now,
-        }
 
     def repaint_now():
         nonlocal last_display_at, last_display_signature, last_status_write_at, last_status_signature
@@ -1120,10 +1378,8 @@ def main():
     def build_root_menu():
         return [
             {"label": "YouTube", "kind": "menu", "target": "youtube"},
-            {"label": "Matrix", "kind": "screen", "target": "matrix"},
-            {"label": "Games", "kind": "menu", "target": "games"},
-            {"label": "Update", "kind": "action", "action": "update_run"},
-            {"label": "Settings", "kind": "menu", "target": "settings"},
+            {"label": "Update", "kind": "menu", "target": "update_confirm"},
+            {"label": "Settings", "kind": "screen", "target": "settings"},
         ]
 
     def reset_pong():
@@ -1157,9 +1413,6 @@ def main():
             or youtube_stream.get("proxy_publish_url")
         )
 
-    def youtube_proxy_manageable():
-        return youtube_stream_exists() and youtube_stream.get("mode") == "proxy"
-
     def build_youtube_menu():
         items = [
             {"label": "Dashboard", "kind": "screen", "target": "youtube"},
@@ -1170,16 +1423,17 @@ def main():
             items.append({"label": "Auth OK", "kind": "noop", "disabled": True})
         else:
             items.append({"label": "Start Auth", "kind": "action", "action": "youtube_auth_start"})
+        if allow_restart_auth():
+            items.append({"label": "Restart Auth", "kind": "action", "action": "youtube_auth_restart"})
         if (youtube_creation or {}).get("status") == "creating":
             items.append({"label": "Creating...", "kind": "noop", "disabled": True})
         elif youtube_auth.get("authorized") and not probe_cache.get("auth_required"):
             items.append({"label": "Create Stream", "kind": "menu", "target": "youtube_create"})
         else:
             items.append({"label": "Create Stream", "kind": "noop", "disabled": True})
-        if youtube_proxy_manageable():
-            items.append({"label": "Manage Stream", "kind": "menu", "target": "youtube_manage"})
-        elif youtube_stream_exists():
-            items.append({"label": "Manage Stream", "kind": "noop", "disabled": True})
+        items.append({"label": "Overlay Demo", "kind": "menu", "target": "youtube_overlay"})
+        if youtube_stream.get("qr_payload"):
+            items.append({"label": "Stream QR", "kind": "screen", "target": "youtube_qr"})
         return items
 
     def build_youtube_create_menu():
@@ -1187,24 +1441,16 @@ def main():
         rotation_label = {"0": "OFF", "90": "+90", "-90": "-90"}.get(youtube_create_rotation, youtube_create_rotation)
         fps_label = {"original": "ORIG", "30": "30FPS", "20": "20FPS"}.get(youtube_create_fps_mode, youtube_create_fps_mode.upper())
         items = [
-            {"label": f"Audio {audio_label}", "kind": "menu", "target": "youtube_create_audio"},
-            {"label": f"Rotate {rotation_label}", "kind": "menu", "target": "youtube_create_rotation"},
+            {"label": "Use Defaults", "kind": "action", "action": "youtube_create_defaults"},
+            {"label": f"Rotation {rotation_label}", "kind": "menu", "target": "youtube_create_rotation"},
             {"label": f"FPS {fps_label}", "kind": "menu", "target": "youtube_create_fps"},
+            {"label": f"Sound {audio_label}", "kind": "menu", "target": "youtube_create_audio"},
         ]
         if (youtube_creation or {}).get("status") == "creating":
-            items.append({"label": "Create Stream", "kind": "noop", "disabled": True})
+            items.append({"label": "Confirm Create", "kind": "noop", "disabled": True})
         else:
-            items.append({"label": "Start Create", "kind": "action", "action": "youtube_create"})
+            items.append({"label": "Confirm Create", "kind": "action", "action": "youtube_create"})
         return items
-
-    def build_youtube_manage_menu():
-        if not youtube_proxy_manageable():
-            return [{"label": "No proxy stream", "kind": "noop", "disabled": True}]
-        return [
-            {"label": f"Audio {youtube_stream.get('audio_mode_short', 'NORM')}", "kind": "menu", "target": "youtube_manage_audio"},
-            {"label": f"Rotate {youtube_stream.get('rotation_short', 'OFF')}", "kind": "menu", "target": "youtube_manage_rotation"},
-            {"label": f"FPS {youtube_stream.get('fps_mode_short', 'ORIG')}", "kind": "menu", "target": "youtube_manage_fps"},
-        ]
 
     def build_youtube_create_audio_menu():
         return [
@@ -1242,56 +1488,36 @@ def main():
             for mode, label in (("original", "Original"), ("30", "30 FPS"), ("20", "20 FPS"))
         ]
 
-    def build_youtube_manage_audio_menu():
-        if not youtube_proxy_manageable():
-            return [{"label": "No proxy stream", "kind": "noop", "disabled": True}]
-        return [
-            {
-                "label": label,
-                "kind": "action",
-                "action": "youtube_audio",
-                "arg": mode,
-                "checked": youtube_stream.get("audio_mode") == mode,
-            }
-            for mode, label in (("normal", "Audio Normal"), ("voice", "Audio Voice"), ("mute", "Audio Mute"))
-        ]
-
-    def build_youtube_manage_rotation_menu():
-        if not youtube_proxy_manageable():
-            return [{"label": "No proxy stream", "kind": "noop", "disabled": True}]
-        return [
-            {
-                "label": label,
-                "kind": "action",
-                "action": "youtube_rotation",
-                "arg": mode,
-                "checked": youtube_stream.get("rotation") == mode,
-            }
-            for mode, label in (("90", "Rotate 90"), ("0", "Rotate Off"), ("-90", "Rotate -90"))
-        ]
-
-    def build_youtube_manage_fps_menu():
-        if not youtube_proxy_manageable():
-            return [{"label": "No proxy stream", "kind": "noop", "disabled": True}]
-        return [
-            {
-                "label": label,
-                "kind": "action",
-                "action": "youtube_fps",
-                "arg": mode,
-                "checked": youtube_stream.get("fps_mode") == mode,
-            }
-            for mode, label in (("original", "Original"), ("30", "30 FPS"), ("20", "20 FPS"))
-        ]
-
-    def build_settings_menu():
+    def build_youtube_overlay_menu():
+        overlay = load_overlay_state()
+        current_html = ""
+        html_path = Path(overlay.get("html_path") or "")
+        if html_path.exists():
+            try:
+                current_html = html_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                current_html = ""
+        current_mode = "off"
+        if overlay.get("enabled"):
+            if "STATIC PIC" in current_html:
+                current_mode = "static"
+            elif "Bangkok Demo" in current_html or "WEATHER" in current_html:
+                current_mode = "weather"
+            else:
+                current_mode = "default"
         items = [
-            {"label": "Overview", "kind": "screen", "target": "overview"},
-            {"label": "Probe", "kind": "screen", "target": "probe"},
+            {"label": "Overlay Off", "kind": "action", "action": "overlay_demo", "arg": "off", "checked": current_mode == "off"},
+            {"label": "Static Pic", "kind": "action", "action": "overlay_demo", "arg": "static", "checked": current_mode == "static"},
+            {"label": "Weather Card", "kind": "action", "action": "overlay_demo", "arg": "weather", "checked": current_mode == "weather"},
+            {"label": "Default Card", "kind": "action", "action": "overlay_demo", "arg": "default", "checked": current_mode == "default"},
         ]
-        if CAPTIVE_PORTAL_ACK_CMD:
-            items.append({"label": "Portal Ack", "kind": "action", "action": "portal_ack"})
         return items
+
+    def build_update_confirm_menu():
+        return [
+            {"label": "Yes", "kind": "action", "action": "update_run"},
+            {"label": "No", "kind": "action", "action": "update_cancel"},
+        ]
 
     def get_menu_definition(menu_id):
         if menu_id == "youtube":
@@ -1304,21 +1530,10 @@ def main():
             return "Create Rotate", build_youtube_create_rotation_menu()
         if menu_id == "youtube_create_fps":
             return "Create FPS", build_youtube_create_fps_menu()
-        if menu_id == "youtube_manage":
-            return "Manage", build_youtube_manage_menu()
-        if menu_id == "youtube_manage_audio":
-            return "Live Audio", build_youtube_manage_audio_menu()
-        if menu_id == "youtube_manage_rotation":
-            return "Live Rotate", build_youtube_manage_rotation_menu()
-        if menu_id == "youtube_manage_fps":
-            return "Live FPS", build_youtube_manage_fps_menu()
-        if menu_id == "games":
-            return "Games", [
-                {"label": "Pong", "kind": "screen", "target": "game_pong"},
-                {"label": "Catch", "kind": "screen", "target": "game_catch"},
-            ]
-        if menu_id == "settings":
-            return "Settings", build_settings_menu()
+        if menu_id == "youtube_overlay":
+            return "Overlay", build_youtube_overlay_menu()
+        if menu_id == "update_confirm":
+            return "Update", build_update_confirm_menu()
         return "Main", build_root_menu()
 
     def current_menu_entry():
@@ -1337,13 +1552,7 @@ def main():
 
     def probe_active():
         menu_id = current_menu_entry()["id"] if menu_stack else "root"
-        return current_screen == "probe" or menu_id == "settings"
-
-    def matrix_active():
-        return ui_mode == "screen" and current_screen == "matrix"
-
-    def game_active():
-        return ui_mode == "screen" and current_screen in ("game_pong", "game_catch")
+        return current_screen in ("probe", "settings") or menu_id == "settings"
 
     def move_menu(delta):
         if ui_mode != "menu":
@@ -1370,6 +1579,7 @@ def main():
     def open_menu():
         nonlocal current_screen, ui_mode
         current_screen = None
+        del menu_stack[1:]
         ui_mode = "menu"
 
     def open_menu_target(menu_id):
@@ -1382,7 +1592,7 @@ def main():
     def trigger_youtube_create_settings_audio(mode):
         nonlocal youtube_create_audio_mode
         youtube_create_audio_mode = mode
-        set_ui_message(f"Create {mode.upper()}")
+        set_ui_message(f"Sound {mode.upper()}")
         close_submenu()
 
     def trigger_youtube_create_settings_rotation(mode):
@@ -1396,6 +1606,29 @@ def main():
         youtube_create_fps_mode = mode
         set_ui_message(f"Create {mode.upper()}")
         close_submenu()
+
+    def trigger_youtube_create_defaults():
+        nonlocal youtube_create_audio_mode, youtube_create_rotation, youtube_create_fps_mode
+        youtube_create_audio_mode, youtube_create_rotation, youtube_create_fps_mode = default_create_settings()
+        set_ui_message("Defaults loaded")
+
+    def trigger_youtube_auth_restart():
+        nonlocal youtube_auth, youtube_status_message, current_screen, ui_mode
+        show_busy("Restart auth", screen="youtube", mode="screen")
+        try:
+            start_device_authorization()
+            youtube_auth = get_auth_status()
+            youtube_status_message = "Open URL, enter code"
+            set_ui_message("Auth restarted")
+            current_screen = "youtube"
+            ui_mode = "screen"
+        except YouTubeLiveError as exc:
+            youtube_status_message = fit_text(str(exc), 20)
+            set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+            ui_mode = "screen"
+        finally:
+            clear_busy()
 
     def trigger_youtube_create():
         nonlocal youtube_creation, youtube_status_message, current_screen, ui_mode
@@ -1463,68 +1696,9 @@ def main():
         finally:
             clear_busy()
 
-    def trigger_youtube_audio(mode):
-        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode, youtube_create_audio_mode
-        show_busy("Audio mode", screen="youtube", mode="screen")
-        try:
-            youtube_stream = set_proxy_audio_mode(mode)
-            youtube_create_audio_mode = youtube_stream.get("audio_mode", mode)
-            youtube_status_message = f"AUDIO {youtube_stream.get('audio_mode_short', mode.upper())}"
-            set_ui_message(youtube_status_message)
-            current_screen = "youtube"
-            ui_mode = "screen"
-        except YouTubeLiveError as exc:
-            youtube_status_message = fit_text(str(exc), 20)
-            set_ui_message(youtube_status_message)
-            current_screen = "youtube"
-            ui_mode = "screen"
-        finally:
-            clear_busy()
-
-    def trigger_youtube_rotation(mode):
-        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode, youtube_create_rotation
-        show_busy("Rotation", screen="youtube", mode="screen")
-        try:
-            youtube_stream = set_proxy_rotation_mode(mode)
-            youtube_create_rotation = youtube_stream.get("rotation", mode)
-            youtube_status_message = f"ROT {youtube_stream.get('rotation_short', mode)}"
-            set_ui_message(youtube_status_message)
-            current_screen = "youtube"
-            ui_mode = "screen"
-        except YouTubeLiveError as exc:
-            youtube_status_message = fit_text(str(exc), 20)
-            set_ui_message(youtube_status_message)
-            current_screen = "youtube"
-            ui_mode = "screen"
-        finally:
-            clear_busy()
-
-    def trigger_youtube_fps(mode):
-        nonlocal youtube_stream, youtube_status_message, current_screen, ui_mode, youtube_create_fps_mode
-        show_busy("FPS mode", screen="youtube", mode="screen")
-        try:
-            youtube_stream = set_proxy_fps_mode(mode)
-            youtube_create_fps_mode = youtube_stream.get("fps_mode", mode)
-            youtube_status_message = youtube_stream.get("fps_mode_short", mode.upper())
-            set_ui_message(youtube_status_message)
-            current_screen = "youtube"
-            ui_mode = "screen"
-        except YouTubeLiveError as exc:
-            youtube_status_message = fit_text(str(exc), 20)
-            set_ui_message(youtube_status_message)
-            current_screen = "youtube"
-            ui_mode = "screen"
-        finally:
-            clear_busy()
-
-    def trigger_portal_ack():
-        nonlocal portal_ack_last, current_screen, ui_mode
-        show_busy("Portal ack", screen="probe", mode="screen")
-        portal_ack_last = perform_portal_ack()
-        set_ui_message(portal_ack_last["message"])
-        current_screen = "probe"
-        ui_mode = "screen"
-        clear_busy()
+    def trigger_update_cancel():
+        close_submenu()
+        set_ui_message("Update canceled")
 
     def trigger_update_run():
         nonlocal current_screen, ui_mode
@@ -1553,7 +1727,7 @@ def main():
             clear_busy()
 
     def open_selected_item():
-        nonlocal current_screen, ui_mode, pong_game, catch_game
+        nonlocal current_screen, ui_mode
         if ui_mode != "menu":
             return
         _, items = current_menu_definition()
@@ -1561,10 +1735,6 @@ def main():
         kind = item.get("kind")
         if kind == "screen":
             current_screen = item.get("target")
-            if current_screen == "game_pong":
-                pong_game = reset_pong()
-            elif current_screen == "game_catch":
-                catch_game = reset_catch()
             ui_mode = "screen"
         elif kind == "menu":
             open_menu_target(item.get("target", "root"))
@@ -1576,29 +1746,28 @@ def main():
                 trigger_youtube_auth_start()
             elif action == "youtube_auth_poll":
                 trigger_youtube_auth_poll()
+            elif action == "youtube_auth_restart":
+                trigger_youtube_auth_restart()
             elif action == "youtube_create":
                 trigger_youtube_create()
+            elif action == "youtube_create_defaults":
+                trigger_youtube_create_defaults()
             elif action == "youtube_create_audio":
                 trigger_youtube_create_settings_audio(item.get("arg", "normal"))
             elif action == "youtube_create_rotation":
                 trigger_youtube_create_settings_rotation(item.get("arg", "0"))
             elif action == "youtube_create_fps":
                 trigger_youtube_create_settings_fps(item.get("arg", "original"))
-            elif action == "youtube_audio":
-                trigger_youtube_audio(item.get("arg", "normal"))
-            elif action == "youtube_rotation":
-                trigger_youtube_rotation(item.get("arg", "0"))
-            elif action == "youtube_fps":
-                trigger_youtube_fps(item.get("arg", "original"))
+            elif action == "overlay_demo":
+                apply_overlay_demo(item.get("arg", "off"))
             elif action == "update_run":
                 trigger_update_run()
-            elif action == "portal_ack":
-                trigger_portal_ack()
+            elif action == "update_cancel":
+                trigger_update_cancel()
         elif item.get("disabled"):
             set_ui_message(item.get("label", "Unavailable"))
 
     def handle_pressed_button(name):
-        nonlocal pong_game, catch_game
         if busy_action:
             return
         logical_name = translate_button_for_rotation(name)
@@ -1606,72 +1775,145 @@ def main():
         if name in ("KEY1", "KEY2", "KEY3"):
             return
         if ui_mode == "home":
-            if logical_name == "PRESS":
+            if logical_name in ("PRESS", "RIGHT"):
                 open_menu()
             return
         if logical_name == "UP":
-            if current_screen == "game_pong":
-                pong_game["player_y"] = max(18, pong_game["player_y"] - 7)
-            elif current_screen == "game_catch":
-                catch_game["player_x"] = max(4, catch_game["player_x"] - 8)
-            else:
-                move_menu(-1)
+            move_menu(-1)
         elif logical_name == "DOWN":
-            if current_screen == "game_pong":
-                pong_game["player_y"] = min(104, pong_game["player_y"] + 7)
-            elif current_screen == "game_catch":
-                catch_game["player_x"] = min(103, catch_game["player_x"] + 8)
-            else:
-                move_menu(1)
-        elif logical_name in ("PRESS", "RIGHT"):
+            move_menu(1)
+        elif logical_name == "PRESS":
             if current_screen == "youtube":
                 if youtube_auth.get("device_pending"):
                     trigger_youtube_auth_poll()
                 elif not youtube_auth.get("authorized"):
                     trigger_youtube_auth_start()
-            elif current_screen == "game_pong" and pong_game.get("game_over"):
-                pong_game = reset_pong()
-            elif current_screen == "game_catch" and catch_game.get("game_over"):
-                catch_game = reset_catch()
             elif ui_mode == "menu":
                 open_selected_item()
+        elif logical_name == "RIGHT":
+            open_menu()
         elif logical_name == "LEFT":
             go_back()
 
-    pong_game = reset_pong()
-    catch_game = reset_catch()
+    def refresh_youtube_state():
+        nonlocal youtube_auth, youtube_creation, youtube_stream, live_input_res, live_output_res
+        auth = get_auth_status()
+        creation = load_creation_state()
+        stream = load_stream_state()
+        detected_in = "-"
+        relay = stream.get("relay") or {}
+        width = relay.get("video_width")
+        height = relay.get("video_height")
+        if width and height:
+            detected_in = f"{width}x{height}"
+        if detected_in == "-" and stream.get("mode") == "proxy":
+            dims = ffprobe_video_dimensions(relay_probe_url())
+            if dims:
+                detected_in = f"{dims[0]}x{dims[1]}"
+                output_res = rotate_resolution_text(detected_in, stream.get("rotation", "0"))
+            else:
+                if relay_input_connected():
+                    detected_in = "LIVE"
+                    output_res = "WAIT"
+                else:
+                    detected_in = "NOFEED"
+                    output_res = "NOFEED"
+        else:
+            output_res = rotate_resolution_text(detected_in, stream.get("rotation", "0"))
+        with state_lock:
+            youtube_auth = auth
+            youtube_creation = creation
+            youtube_stream = stream
+            live_input_res = detected_in
+            live_output_res = output_res
+
+    def refresh_runtime_loop():
+        nonlocal prev, prev_t, cpu_temp, cpu_pct, mem_pct, rx1ps, tx1ps
+        nonlocal ap_name, ap_password, w0, w1, active_wifi, ap_ok, cl_ok, signal, last_network_refresh_at
+        last_youtube_refresh_at = 0.0
+        while True:
+            now = time.time()
+            did_work = False
+            if now - prev_t >= REFRESH_SEC:
+                curr = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
+                dt = max(0.2, now - prev_t)
+                next_cpu_temp = read_cpu_temp_c()
+                next_cpu_pct = read_cpu_percent()
+                next_mem_pct = read_mem_percent()
+                next_rx1ps = max(0, (curr[WLAN_UP]["rx"] - prev[WLAN_UP]["rx"]) / dt)
+                next_tx1ps = max(0, (curr[WLAN_UP]["tx"] - prev[WLAN_UP]["tx"]) / dt)
+                with state_lock:
+                    cpu_temp = next_cpu_temp
+                    cpu_pct = next_cpu_pct
+                    mem_pct = next_mem_pct
+                    rx1ps = next_rx1ps
+                    tx1ps = next_tx1ps
+                    prev = curr
+                    prev_t = now
+                did_work = True
+
+            if STATE_REFRESH_EVENT.is_set() or (now - last_network_refresh_at >= NETWORK_FALLBACK_REFRESH_SEC):
+                next_ap_name = read_ap_name()
+                next_ap_password = read_ap_password()
+                next_w0 = ip_only(read_ipv4(WLAN_AP))
+                next_w1 = ip_only(read_ipv4(WLAN_UP))
+                next_active_wifi = read_active_wifi()
+                next_ap_ok = next_ap_name != "unknown" and next_w0 != "-"
+                next_cl_ok = next_active_wifi["name"] != "-" and next_w1 != "-"
+                next_signal = next_active_wifi["signal"] if next_cl_ok else "-"
+                with state_lock:
+                    ap_name = next_ap_name
+                    ap_password = next_ap_password
+                    w0 = next_w0
+                    w1 = next_w1
+                    active_wifi = next_active_wifi
+                    ap_ok = next_ap_ok
+                    cl_ok = next_cl_ok
+                    signal = next_signal
+                    last_network_refresh_at = now
+                STATE_REFRESH_EVENT.clear()
+                did_work = True
+
+            if now - last_youtube_refresh_at >= YOUTUBE_STATE_REFRESH_SEC:
+                refresh_youtube_state()
+                last_youtube_refresh_at = now
+                did_work = True
+
+            if did_work:
+                request_state_refresh()
+            time.sleep(0.1)
+
+    def refresh_probe_loop():
+        nonlocal probe_cache
+        while True:
+            now = time.time()
+            connectivity = read_nm_connectivity()
+            auth_required = connectivity == "portal"
+            portal_capture = probe_cache.get("portal_capture", {})
+            if auth_required:
+                with state_lock:
+                    wifi_name = active_wifi.get("name", "-")
+                portal_capture = capture_portal_response(wifi_name)
+            next_probe = {
+                "last_run": now,
+                "youtube_ping_ms": ping_latency_ms(YOUTUBE_PING_HOST),
+                "youtube_rtmp_ms": tcp_latency_ms(YOUTUBE_RTMP_HOST, YOUTUBE_RTMP_PORT),
+                "connectivity": connectivity,
+                "portal_suspected": auth_required,
+                "internet_ok": connectivity == "full",
+                "auth_required": auth_required,
+                "portal_capture": portal_capture,
+            }
+            with state_lock:
+                probe_cache = next_probe
+            request_state_refresh()
+            time.sleep(PROBE_INTERVAL_SEC)
+
+    Thread(target=refresh_runtime_loop, daemon=True).start()
+    Thread(target=refresh_probe_loop, daemon=True).start()
 
     while True:
         now = time.time()
-        if now - prev_t >= REFRESH_SEC:
-            curr = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
-            dt = max(0.2, now - prev_t)
-            cpu_temp = read_cpu_temp_c()
-            cpu_pct = read_cpu_percent()
-            mem_pct = read_mem_percent()
-            rx1ps = max(0, (curr[WLAN_UP]["rx"] - prev[WLAN_UP]["rx"]) / dt)
-            tx1ps = max(0, (curr[WLAN_UP]["tx"] - prev[WLAN_UP]["tx"]) / dt)
-            if youtube_active():
-                youtube_auth = get_auth_status()
-                youtube_creation = load_creation_state()
-                youtube_stream = load_stream_state()
-            prev = curr
-            prev_t = now
-
-        should_refresh_network = STATE_REFRESH_EVENT.is_set() or (
-            now - last_network_refresh_at >= NETWORK_FALLBACK_REFRESH_SEC
-        )
-        if should_refresh_network:
-            STATE_REFRESH_EVENT.clear()
-            ap_name = read_ap_name()
-            w0 = ip_only(read_ipv4(WLAN_AP))
-            w1 = ip_only(read_ipv4(WLAN_UP))
-            active_wifi = read_active_wifi()
-            ap_ok = ap_name != "unknown" and w0 != "-"
-            cl_ok = active_wifi["name"] != "-" and w1 != "-"
-            signal = active_wifi["signal"] if cl_ok else "-"
-            last_network_refresh_at = now
-
         button_states = read_button_states()
         if BUTTON_EVENT_MODE:
             drain_button_events()
@@ -1682,83 +1924,10 @@ def main():
                 handle_pressed_button(name)
             button_states_prev[name] = is_pressed
 
-        if matrix_active():
-            matrix_tick += 1
-            for idx, col in enumerate(matrix_columns):
-                if matrix_tick % col["speed"] != 0:
-                    continue
-                col["head"] += 1
-                if col["head"] - col["length"] > MATRIX_ROWS:
-                    col["head"] = -((idx * 7 + matrix_tick) % MATRIX_ROWS)
-                    col["length"] = 4 + ((idx + matrix_tick) % 9)
-                    shift = (matrix_tick + idx * 3) % len(MATRIX_CHARS)
-                    col["chars"] = [MATRIX_CHARS[(shift + row * 5) % len(MATRIX_CHARS)] for row in range(MATRIX_ROWS)]
-
-        if current_screen == "game_pong" and game_active() and not pong_game["game_over"]:
-            pong_game["cpu_y"] += 3 if pong_game["ball_y"] > pong_game["cpu_y"] + 10 else -3 if pong_game["ball_y"] < pong_game["cpu_y"] + 10 else 0
-            pong_game["cpu_y"] = max(18, min(104, pong_game["cpu_y"]))
-            pong_game["ball_x"] += pong_game["ball_vx"]
-            pong_game["ball_y"] += pong_game["ball_vy"]
-            if pong_game["ball_y"] <= 18 or pong_game["ball_y"] >= 122:
-                pong_game["ball_vy"] *= -1
-                pong_game["ball_y"] = max(18, min(122, pong_game["ball_y"]))
-            if pong_game["ball_x"] <= 8 and pong_game["player_y"] - 2 <= pong_game["ball_y"] <= pong_game["player_y"] + 22:
-                pong_game["ball_vx"] = abs(pong_game["ball_vx"])
-            if pong_game["ball_x"] >= 116 and pong_game["cpu_y"] - 2 <= pong_game["ball_y"] <= pong_game["cpu_y"] + 22:
-                pong_game["ball_vx"] = -abs(pong_game["ball_vx"])
-            if pong_game["ball_x"] < 0:
-                pong_game["cpu_score"] += 1
-                pong_game["ball_x"], pong_game["ball_y"] = 62, 62
-                pong_game["ball_vx"] = 3
-                pong_game["ball_vy"] = random.choice((-2, -1, 1, 2))
-            elif pong_game["ball_x"] > 124:
-                pong_game["player_score"] += 1
-                pong_game["ball_x"], pong_game["ball_y"] = 62, 62
-                pong_game["ball_vx"] = -3
-                pong_game["ball_vy"] = random.choice((-2, -1, 1, 2))
-            if pong_game["player_score"] >= 5 or pong_game["cpu_score"] >= 5:
-                pong_game["game_over"] = True
-
-        if current_screen == "game_catch" and game_active() and not catch_game["game_over"]:
-            catch_game["spawn_tick"] += 1
-            if catch_game["spawn_tick"] % 8 == 0:
-                catch_game["drops"].append({"x": random.randint(6, 116), "y": 18, "vy": random.randint(4, 6)})
-            next_drops = []
-            for item in catch_game["drops"]:
-                item["y"] += item["vy"]
-                caught = item["y"] >= 114 and catch_game["player_x"] - 2 <= item["x"] <= catch_game["player_x"] + 22
-                missed = item["y"] > 123
-                if caught:
-                    catch_game["score"] += 1
-                elif missed:
-                    catch_game["lives"] -= 1
-                else:
-                    next_drops.append(item)
-            catch_game["drops"] = next_drops
-            if catch_game["lives"] <= 0:
-                catch_game["game_over"] = True
-
-        if probe_active() and now - probe_cache["last_run"] >= PROBE_INTERVAL_SEC:
-            connectivity = read_nm_connectivity()
-            auth_required = connectivity == "portal"
-            portal_capture = probe_cache.get("portal_capture", {})
-            if auth_required:
-                portal_capture = capture_portal_response(active_wifi.get("name", "-"))
-            probe_cache = {
-                "last_run": now,
-                "youtube_ping_ms": ping_latency_ms(YOUTUBE_PING_HOST),
-                "youtube_rtmp_ms": tcp_latency_ms(YOUTUBE_RTMP_HOST, YOUTUBE_RTMP_PORT),
-                "connectivity": connectivity,
-                "portal_suspected": auth_required,
-                "internet_ok": connectivity == "full",
-                "auth_required": auth_required,
-                "portal_capture": portal_capture,
-            }
-
         state = compose_state(now)
 
         signature = state_signature(state)
-        active_refresh_sec = game_refresh_sec if current_screen in ("game_pong", "game_catch") and ui_mode == "screen" else DISPLAY_REFRESH_SEC
+        active_refresh_sec = DISPLAY_REFRESH_SEC
         should_refresh_display = bool(pressed_events) or (
             signature != last_display_signature and now - last_display_at >= active_refresh_sec
         )

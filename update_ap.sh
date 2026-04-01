@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR=${REPO_DIR:-/home/pi/rpi_ap_tools_waveshare}
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+DEFAULT_REPO_DIR=$SCRIPT_DIR
+if [ ! -d "$DEFAULT_REPO_DIR/.git" ] && [ -d /home/pi/rpi_ap_tools_waveshare_bundle/.git ]; then
+  DEFAULT_REPO_DIR=/home/pi/rpi_ap_tools_waveshare_bundle
+elif [ ! -d "$DEFAULT_REPO_DIR/.git" ] && [ -d /home/pi/rpi_ap_tools_waveshare/.git ]; then
+  DEFAULT_REPO_DIR=/home/pi/rpi_ap_tools_waveshare
+fi
+
+REPO_DIR=${REPO_DIR:-$DEFAULT_REPO_DIR}
 INSTALL_SCRIPT=${INSTALL_SCRIPT:-install.sh}
 INSTALL_DIR=${INSTALL_DIR:-/opt/rpi_ap_tools}
 AP_CONFIG_FILE=${AP_CONFIG_FILE:-/etc/default/rpi_ap_tools_ap}
@@ -38,5 +46,8 @@ sudo "$INSTALL_DIR"/configure_ap.sh
 sudo systemctl restart rpi-shared-egress.service
 sudo systemctl restart rpi-wlan1-ui.service
 sudo systemctl restart rpi-lcd-status.service
+
+log "Service status summary"
+sudo systemctl --no-pager --full status rpi-wlan1-ui.service rpi-lcd-status.service rpi-shared-egress.service || true
 
 log "Update complete"

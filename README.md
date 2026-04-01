@@ -68,37 +68,43 @@ LCD controls:
   - physical `RIGHT` acts as UI `DOWN`
   - physical `UP` acts as UI `RIGHT`
   - physical `DOWN` acts as UI `LEFT`
-- `PRESS` from home opens the main menu
+- `PRESS` or remapped `RIGHT` from home opens the main menu
 - remapped `UP` / `DOWN` scroll the current menu
-- `PRESS` or remapped `RIGHT` open the selected item
+- `PRESS` opens the selected item or runs the primary action on the current screen
 - remapped `LEFT` goes back one level
+- remapped `RIGHT` jumps back to the root menu
 - backing out from the root menu returns to the home screen
 - `KEY1`, `KEY2`, and `KEY3` are not used by the LCD UI
+- All normal LCD pages now use:
+  - a top header with screen id plus `T`, `C`, and `M`
+  - a bottom action bar with `< BACK`, `OPEN`, and `MENU >`
 - The main menu contains:
   - `YouTube`
-  - `Matrix`
-  - `Games`
-  - `FFmpeg`
   - `Update`
   - `Settings`
-- The `Games` submenu contains:
-  - `Pong`
-  - `Catch`
 - The `YouTube` submenu contains:
-  - dashboard / stream status view
-  - start device auth
-  - check auth when a device code is pending
-  - create stream
-- The `FFmpeg` submenu contains:
-  - proxy audio mode switches when proxy mode is active
+  - `Dashboard`
+  - `Start Auth`
+  - `Check Auth` when a device code is pending
+  - `Restart Auth` when auth is pending or failed
+  - `Create Stream`
+  - `Stream QR` when a stream exists
 - On the YouTube screen:
+  - the dashboard shows stream title, RTMP summary, rotation, FPS, input/output resolution, and overlay state
   - `PRESS` starts device auth when YouTube is not authorized
   - the device code and verification URL are shown on the LCD
   - `PRESS` checks auth completion while a device code is pending
-- Matrix, games, probe checks, and YouTube state refresh only run while their related screen or menu is active
+- The create-stream submenu contains:
+  - `Use Defaults`
+  - `Rotation`
+  - `FPS`
+  - `Sound`
+  - `Confirm Create`
+- Probe checks and YouTube state refresh only run while their related screen or menu is active
 - `Update` runs `/home/pi/update_ap.sh` in the background from the LCD UI
+- `Update` now asks for confirmation with `Yes` / `No`
 - LCD-triggered update output is written to `/run/rpi_ap_tools_update.log`
-- If `CAPTIVE_PORTAL_ACK_CMD` is configured, the `Settings` submenu also shows `Portal Ack`
+- `Settings` shows the RTMP summary, default rotation/FPS/sound, and the AP Wi-Fi password
 
 YouTube config:
 - `YOUTUBE_CLIENT_CONFIG_PATH` default: `/etc/rpi_ap_tools_youtube_client.json`
@@ -146,54 +152,55 @@ Screen map:
 Home:
 ```text
 +------------------+
-| HOME         MENU|
-|                  |
-|   AP NAME        |
-|   Uplink SSID    |
-|   SIG 78%        |
-|                  |
-| YT NORM  CPU 12% |
-| TEMP 49C         |
-| PRESS CENTER     |
+| HOME T:49 C:12 M:|
+| AP  Rpi_Ap_Secure|
+| IP  192.168.4.1  |
+| W1  HotspotName  |
+| IP  10.0.0.15    |
+| SIG 78%          |
+| TXR 1.2M/3.4M    |
+|<BACK OPEN MENU > |
 +------------------+
 ```
 
 Menu:
 ```text
 +------------------+
+| MENU T:49 C:12 M:|
 | MAIN             |
 | > YouTube        |
-|   Matrix         |
-|   Games          |
-|   FFmpeg         |
 |   Update         |
 |   Settings       |
+|                  |
+|<BACK OPEN MENU > |
 +------------------+
 ```
 
 YouTube auth pending:
 ```text
 +------------------+
-| YOUTUBE   PENDING|
-| Open URL, enter  |
-| code             |
-| CODE ABCD-EFGH   |
-| youtube.com/...  |
-| EXP 14M32        |
-| PRESS CHECK      |
+| YT   T:49 C:12 M:|
+| AUTH PENDING     |
+| Code ABCD-EFGH   |
+| google.com/device|
+| PRESS=CHECK      |
+|                  |
+|                  |
+|<BACK OPEN MENU > |
 +------------------+
 ```
 
-YouTube relay active:
+YouTube dashboard:
 ```text
 +------------------+
-| YOUTUBE     READY|
-| Stream title     |
-| youtube watch... |
-| AUDIO VOICE      |
-| 1080x1920        |
-| PORTRAIT         |
-| LEFT=BACK        |
+| YT   T:49 C:12 M:|
+| Name Live Test   |
+| RTMP .../live    |
+| Rot  OFF         |
+| FPS  ORIG        |
+| In   1080x1920   |
+| Out  1080x1920   |
+|<BACK OPEN MENU > |
 +------------------+
 ```
 

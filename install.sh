@@ -24,6 +24,22 @@ sudo chmod +x /home/pi/update_ap.sh
 sudo apt-get update
 sudo apt-get install -y python3-qrcode python3-pil ffmpeg
 
+install_chromium_if_available() {
+  local pkg
+  for pkg in chromium-browser chromium; do
+    if apt-cache show "$pkg" >/dev/null 2>&1; then
+      echo "Installing overlay renderer package: $pkg"
+      sudo apt-get install -y "$pkg"
+      return 0
+    fi
+  done
+  echo "WARNING: No Chromium-compatible package found in apt metadata."
+  echo "Overlay HTML-to-PNG rendering will stay unavailable until chromium is installed manually."
+  return 1
+}
+
+install_chromium_if_available || true
+
 # Preserve saved Wi-Fi credentials across reinstalls/upgrades.
 sudo mkdir -p "$(dirname "$WIFI_DB_PATH")"
 if [ ! -f "$WIFI_DB_PATH" ]; then
