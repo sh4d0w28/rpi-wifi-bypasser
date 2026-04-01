@@ -117,8 +117,8 @@ YouTube config:
 - `YOUTUBE_PROXY_ENABLED` default: `1`
 - `YOUTUBE_PROXY_AUDIO_MODE` is currently forced to `normal` at startup
 - Local proxy relay defaults:
-  - publish URL: `rtmp://{ap_ip}:7777/live`
-  - listen URL: `rtmp://0.0.0.0:7777/live`
+  - publish URL: `rtmp://{ap_ip}/live`
+  - listen URL: `rtmp://0.0.0.0:1935/live`
   - live audio control URL: `tcp://127.0.0.1:5559`
   - upstream target: YouTube `ingestionAddress` plus the generated stream key
   - relay process keeps video copy and always encodes audio once, so audio mode can change live

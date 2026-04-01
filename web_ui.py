@@ -337,12 +337,15 @@ def render_overlay_png(force=False):
             renderer_bin,
             "--headless",
             "--disable-gpu",
+            "--disable-dev-shm-usage",
             "--hide-scrollbars",
             "--default-background-color=00000000",
             f"--window-size={overlay['width']},{overlay['height']}",
             f"--screenshot={png_path}",
             OVERLAY_RENDER_HTML_PATH.as_uri(),
         ]
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            cmd.insert(1, "--no-sandbox")
         proc = subprocess.run(cmd, text=True, capture_output=True, check=False, timeout=30)
         if proc.returncode != 0:
             message = proc.stderr.strip() or proc.stdout.strip() or "Overlay render failed"

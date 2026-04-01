@@ -39,7 +39,7 @@ STREAM_TITLE_PREFIX = os.environ.get("YOUTUBE_STREAM_TITLE_PREFIX", "RPi Live").
 STREAM_PRIVACY_STATUS = os.environ.get("YOUTUBE_STREAM_PRIVACY_STATUS", "public").strip() or "public"
 PROXY_ENABLED = os.environ.get("YOUTUBE_PROXY_ENABLED", "1").strip().lower() not in ("0", "false", "no")
 PROXY_PUBLISH_URL_TEMPLATE = os.environ.get("YOUTUBE_PROXY_PUBLISH_URL", "").strip()
-PROXY_RTMP_PORT = int(os.environ.get("YOUTUBE_PROXY_RTMP_PORT", "7777") or "7777")
+PROXY_RTMP_PORT = int(os.environ.get("YOUTUBE_PROXY_RTMP_PORT", "1935") or "1935")
 PROXY_RTMP_APP = os.environ.get("YOUTUBE_PROXY_RTMP_APP", "live").strip().strip("/")
 PROXY_ZMQ_PORT = int(os.environ.get("YOUTUBE_PROXY_ZMQ_PORT", "5559") or "5559")
 FFMPEG_BIN = os.environ.get("YOUTUBE_PROXY_FFMPEG_BIN", "ffmpeg").strip() or "ffmpeg"
@@ -118,6 +118,7 @@ PROXY_VIDEO_ENCODER = os.environ.get("YOUTUBE_PROXY_VIDEO_ENCODER", "auto").stri
 PROXY_HW_VIDEO_ENCODER = os.environ.get("YOUTUBE_PROXY_HW_VIDEO_ENCODER", "h264_v4l2m2m").strip() or "h264_v4l2m2m"
 PROXY_HW_VIDEO_BITRATE = str(os.environ.get("YOUTUBE_PROXY_HW_VIDEO_BITRATE", "6000k") or "6000k").strip()
 OVERLAY_FRAME_INTERVAL_SEC = max(0.2, float(os.environ.get("YOUTUBE_OVERLAY_FRAME_INTERVAL_SEC", "1.0") or "1.0"))
+RELAY_START_TIMEOUT_SEC = max(1.0, float(os.environ.get("YOUTUBE_RELAY_START_TIMEOUT_SEC", "5.0") or "5.0"))
 ZMQ_REQ = 3
 ZMQ_LINGER = 17
 ZMQ_RCVTIMEO = 27
@@ -631,6 +632,82 @@ def _pid_alive(pid):
     return True
 
 
+def _pid_cmdline(pid):
+    try:
+        raw = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
+    except (OSError, TypeError, ValueError):
+        return ""
+    return raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip()
+
+
+def _relay_pid_matches(pid, listen_url="", target_url=""):
+    if not _pid_alive(pid):
+        return False
+    cmdline = _pid_cmdline(pid)
+    if not cmdline:
+        return False
+    ffmpeg_name = Path(FFMPEG_BIN).name
+    if ffmpeg_name not in cmdline and "ffmpeg" not in cmdline:
+        return False
+    if listen_url and listen_url not in cmdline:
+        return False
+    if target_url and target_url not in cmdline:
+        return False
+    return True
+
+
+def _listen_port_from_url(listen_url):
+    try:
+        parsed = urllib.parse.urlparse(listen_url or "")
+    except ValueError:
+        return 0
+    try:
+        return int(parsed.port or 1935)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _relay_port_listening(port, pid=None):
+    if not port:
+        return False
+    try:
+        proc = subprocess.run(
+            ["ss", "-lntp"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if proc.returncode != 0:
+        return False
+    token = f":{int(port)}"
+    pid_token = f"pid={int(pid)}" if pid else ""
+    for line in proc.stdout.splitlines():
+        if token not in line:
+            continue
+        if pid_token and pid_token not in line:
+            continue
+        return True
+    return False
+
+
+def _tail_log_text(path, max_bytes=4096):
+    if not path:
+        return ""
+    log_path = Path(path)
+    if not log_path.exists():
+        return ""
+    try:
+        raw = log_path.read_bytes()
+    except OSError:
+        return ""
+    if max_bytes and len(raw) > max_bytes:
+        raw = raw[-max_bytes:]
+    return raw.decode("utf-8", errors="ignore").strip()
+
+
 def normalize_creation_state(state):
     if not isinstance(state, dict):
         return {}
@@ -661,7 +738,7 @@ def normalize_relay_state(state):
     pid = state.get("pid")
     if not pid:
         return state
-    state["running"] = _pid_alive(pid)
+    state["running"] = _relay_pid_matches(pid, state.get("listen_url", ""), state.get("target_url", ""))
     if not state["running"] and state.get("status") == "running":
         state["status"] = "stopped"
         state.setdefault("stopped_at", time.time())
@@ -1024,7 +1101,11 @@ def _proxy_publish_url(ap_ip):
         return PROXY_PUBLISH_URL_TEMPLATE.format(ap_ip=ap_ip or "")
     host = ap_ip or "127.0.0.1"
     if PROXY_RTMP_APP:
+        if PROXY_RTMP_PORT == 1935:
+            return f"rtmp://{host}/{PROXY_RTMP_APP}"
         return f"rtmp://{host}:{PROXY_RTMP_PORT}/{PROXY_RTMP_APP}"
+    if PROXY_RTMP_PORT == 1935:
+        return f"rtmp://{host}"
     return f"rtmp://{host}:{PROXY_RTMP_PORT}"
 
 
@@ -1376,6 +1457,24 @@ def _start_overlay_feed(png_path):
     )
 
 
+def _await_relay_ready(proc, listen_url, target_url, log_path):
+    deadline = time.time() + RELAY_START_TIMEOUT_SEC
+    port = _listen_port_from_url(listen_url)
+    while time.time() < deadline:
+        exit_code = proc.poll()
+        if exit_code is not None:
+            detail = _tail_log_text(log_path)
+            if detail:
+                raise YouTubeLiveError(f"Proxy relay exited early: {detail.splitlines()[-1]}")
+            raise YouTubeLiveError(f"Proxy relay exited early with code {exit_code}")
+        if _relay_pid_matches(proc.pid, listen_url, target_url) and _relay_port_listening(port, proc.pid):
+            return
+        time.sleep(0.1)
+    if not _relay_pid_matches(proc.pid, listen_url, target_url):
+        raise YouTubeLiveError("Proxy relay failed to stay alive after launch")
+    raise YouTubeLiveError(f"Proxy relay did not open listen port {port} in time")
+
+
 def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None, rotation=None, fps_mode=None, overlay=None):
     if not target_url:
         raise YouTubeLiveError("Missing YouTube RTMP target for proxy relay")
@@ -1425,6 +1524,21 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None,
         raise
     if overlay_feed and overlay_feed.stdout is not None:
         overlay_feed.stdout.close()
+    try:
+        _await_relay_ready(proc, listen_url, target_url, RELAY_LOG_PATH)
+    except Exception:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        if overlay_feed:
+            try:
+                overlay_feed.terminate()
+            except OSError:
+                pass
+        clear_relay_state()
+        log_handle.close()
+        raise
     relay = _decorate_stream_state(
         {
             "status": "running",
@@ -1462,6 +1576,7 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None,
                 audio_mode,
                 exc,
             )
+    log_handle.close()
     save_relay_state(relay)
     return relay
 
