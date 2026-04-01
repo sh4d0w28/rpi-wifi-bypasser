@@ -2,64 +2,137 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>RPi uplink Wi-Fi</title>
+  <title>RPi uplink control</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root {
       color-scheme: dark;
-      --bg: #111111;
+      --bg: #0b1220;
+      --bg-accent: radial-gradient(circle at top left, rgba(34, 197, 94, 0.12), transparent 32%), radial-gradient(circle at top right, rgba(56, 189, 248, 0.14), transparent 28%), #0b1220;
       --card: rgba(15, 23, 42, 0.92);
       --card-border: #334155;
       --text: #e5eefc;
-      --muted: #9fb0c8;
+      --muted: #94a3b8;
       --field: #0f172a;
       --field-border: #475569;
       --field-focus: #38bdf8;
       --button: #38bdf8;
       --button-text: #082f49;
       --button-hover: #7dd3fc;
-      --chip: #1e293b;
-      --chip-hover: #334155;
+      --chip: #172033;
+      --chip-hover: #243244;
       --table-border: #243244;
       --row-hover: rgba(56, 189, 248, 0.12);
       --success: #34d399;
       --error: #f87171;
-      --shadow: 0 18px 40px rgba(2, 6, 23, 0.38);
+      --shadow: 0 22px 44px rgba(2, 6, 23, 0.4);
     }
 
     * { box-sizing: border-box; }
     body {
       font-family: "Segoe UI", Arial, sans-serif;
-      margin: 16px;
-      max-width: 980px;
-      background: var(--bg);
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg-accent);
       color: var(--text);
     }
-    h1, h2, h3 { color: var(--text); }
+    .page {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 20px 16px 40px;
+    }
+    h1, h2, h3 { color: var(--text); margin-top: 0; }
     p, label { color: var(--muted); }
     strong { color: var(--text); }
-    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    a { color: #7dd3fc; }
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    .hero p { margin: 6px 0 0; }
+    .hero-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .hero-badge {
+      padding: 10px 14px;
+      border: 1px solid var(--card-border);
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.82);
+      color: var(--text);
+      box-shadow: var(--shadow);
+    }
     .card {
       border: 1px solid var(--card-border);
-      border-radius: 16px;
+      border-radius: 18px;
       padding: 16px;
-      flex: 1;
-      min-width: 280px;
       background: var(--card);
       box-shadow: var(--shadow);
-      backdrop-filter: blur(8px);
+      backdrop-filter: blur(10px);
     }
-    input, select, button {
-      padding: 10px;
-      margin: 6px 0;
+    .flash-stack {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .flash {
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid var(--card-border);
+      background: rgba(15, 23, 42, 0.92);
+    }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .tab-button {
+      width: auto;
+      min-width: 110px;
+      padding: 12px 16px;
+      border-radius: 999px;
+      border: 1px solid var(--field-border);
+      background: rgba(15, 23, 42, 0.84);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .tab-button.active {
+      background: linear-gradient(135deg, #38bdf8, #22c55e);
+      color: #052033;
+      border-color: transparent;
+      font-weight: 700;
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .stack { display: grid; gap: 16px; }
+    input, select, textarea, button {
       width: 100%;
-      border-radius: 10px;
+      margin: 6px 0;
+      padding: 10px;
+      border-radius: 12px;
       border: 1px solid var(--field-border);
       background: var(--field);
       color: var(--text);
     }
+    textarea {
+      min-height: 260px;
+      resize: vertical;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.4;
+    }
     input::placeholder { color: var(--muted); }
-    input:focus, select:focus, button:focus {
+    input:focus, select:focus, textarea:focus, button:focus {
       outline: 2px solid rgba(56, 189, 248, 0.28);
       outline-offset: 1px;
       border-color: var(--field-focus);
@@ -78,19 +151,34 @@
       background: var(--field-border);
       color: var(--muted);
     }
-    .mono { font-family: Consolas, "Courier New", monospace; color: var(--text); }
-    .ok { color: var(--success); }
-    .err { color: var(--error); }
-    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-    .chip {
+    .secondary-button {
+      width: auto;
+      min-width: 120px;
+      background: var(--chip);
+      color: var(--text);
       border: 1px solid var(--field-border);
-      border-radius: 999px;
+    }
+    .secondary-button:hover { background: var(--chip-hover); }
+    .button-row, .inline-button-group, .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .button-row button, .inline-button-group button {
+      width: auto;
+      flex: 1 1 120px;
+    }
+    .chips {
+      margin-top: 10px;
+    }
+    .chip {
+      width: auto;
       padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--field-border);
       background: var(--chip);
       color: var(--text);
       cursor: pointer;
-      font-size: 14px;
-      width: auto;
     }
     .chip:hover { background: var(--chip-hover); }
     .saved-badge {
@@ -110,70 +198,7 @@
       gap: 8px;
       align-items: center;
     }
-    .field-row input {
-      flex: 1;
-    }
-    .secondary-button {
-      width: auto;
-      min-width: 110px;
-      background: var(--chip);
-      color: var(--text);
-      border: 1px solid var(--field-border);
-    }
-    .secondary-button:hover { background: var(--chip-hover); }
-    .button-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 10px;
-    }
-    .button-row button {
-      width: auto;
-      flex: 1 1 120px;
-    }
-    .mode-active {
-      border-color: var(--field-focus);
-      box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.25);
-      background: rgba(56, 189, 248, 0.16);
-    }
-    .inline-button {
-      width: auto;
-      min-width: 0;
-      display: inline-block;
-      padding: 6px 10px;
-      margin: 0 0 0 8px;
-      background: var(--chip);
-      color: var(--text);
-      border: 1px solid var(--field-border);
-      vertical-align: middle;
-    }
-    .inline-button:hover { background: var(--chip-hover); }
-    .inline-button-group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: 8px 0;
-    }
-    .inline-button-group .inline-button {
-      margin: 0;
-    }
-    .code-copy {
-      cursor: pointer;
-      text-decoration: underline;
-      text-decoration-style: dotted;
-    }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 10px 8px; border-bottom: 1px solid var(--table-border); text-align: left; }
-    th { color: var(--text); }
-    tr.clickable { cursor: pointer; }
-    tr.clickable:hover { background: var(--row-hover); }
-    .signal { white-space: nowrap; }
-    .prefill-note {
-      margin-top: 10px;
-      color: var(--success);
-      min-height: 1.2em;
-      font-size: 14px;
-    }
+    .field-row input { flex: 1; }
     .diag-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -190,29 +215,33 @@
       display: block;
       margin-bottom: 4px;
     }
-    .qr-card {
-      margin-top: 12px;
-      padding: 12px;
-      border: 1px solid var(--field-border);
-      border-radius: 12px;
-      background: rgba(15, 23, 42, 0.72);
-    }
-    .qr-card img {
-      display: block;
-      width: 100%;
-      max-width: 280px;
-      margin: 0 auto 12px;
-      background: white;
-      padding: 8px;
-      border-radius: 12px;
-    }
-    .stack-form {
-      margin-top: 10px;
-    }
+    .mono { font-family: Consolas, "Courier New", monospace; color: var(--text); }
+    .ok { color: var(--success); }
+    .err { color: var(--error); }
     .help-text {
       font-size: 14px;
       color: var(--muted);
     }
+    .prefill-note {
+      min-height: 1.2em;
+      font-size: 14px;
+      color: var(--success);
+    }
+    .qr-card, .danger-box {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 14px;
+    }
+    .qr-card {
+      border: 1px solid var(--field-border);
+      background: rgba(15, 23, 42, 0.72);
+    }
+    .danger-box {
+      border: 3px double #ff5f5f;
+      background: rgba(96, 0, 0, 0.22);
+      color: #ffd4d4;
+    }
+    .danger-box strong { color: #ffd4d4; }
     .log-view {
       margin-top: 10px;
       padding: 12px;
@@ -227,16 +256,50 @@
       overflow: auto;
       max-height: 340px;
     }
-    .danger-box {
-      margin-top: 12px;
-      padding: 12px;
-      border: 3px double #ff5f5f;
-      border-radius: 12px;
-      background: rgba(96, 0, 0, 0.22);
-      color: #ffd4d4;
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid var(--table-border); text-align: left; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: var(--row-hover); }
+    .signal { white-space: nowrap; }
+    .mode-active {
+      border-color: var(--field-focus);
+      box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.25);
+      background: rgba(56, 189, 248, 0.16);
     }
-    .danger-box strong {
-      color: #ffd4d4;
+    .overlay-preview {
+      width: 100%;
+      min-height: 220px;
+      border: 1px solid var(--field-border);
+      border-radius: 16px;
+      background:
+        linear-gradient(45deg, rgba(148, 163, 184, 0.08) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(148, 163, 184, 0.08) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(148, 163, 184, 0.08) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(148, 163, 184, 0.08) 75%),
+        #0f172a;
+      background-size: 24px 24px;
+      background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+    .overlay-preview img {
+      max-width: 100%;
+      max-height: 420px;
+      object-fit: contain;
+    }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 8px 0 4px;
+    }
+    .checkbox-row input {
+      width: auto;
+      margin: 0;
+    }
+    @media (max-width: 860px) {
+      .grid-2 { grid-template-columns: 1fr; }
     }
     @media (max-width: 700px) {
       table, thead, tbody, th, td, tr { display: block; }
@@ -257,6 +320,10 @@
         font-weight: bold;
         color: var(--text);
       }
+      .hero {
+        flex-direction: column;
+        align-items: start;
+      }
       .field-row {
         display: block;
       }
@@ -267,337 +334,376 @@
   </style>
 </head>
 <body>
-  <h1>RPi uplink Wi-Fi</h1>
+  <div class="page">
+    <div class="hero">
+      <div>
+        <h1>RPi uplink control</h1>
+        <p>Manage `wlan1`, YouTube relay, HTML-to-PNG overlays, and system actions from one page.</p>
+      </div>
+      <div class="hero-badges">
+        <div class="hero-badge"><strong>AP</strong> <span class="mono">{{ ap_name }}</span></div>
+        <div class="hero-badge"><strong>Uplink</strong> <span class="mono">{{ active.name or 'none' }}</span></div>
+        <div class="hero-badge"><strong>Overlay</strong> <span class="mono">{{ 'on' if overlay.enabled else 'off' }}</span></div>
+      </div>
+    </div>
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-stack">
+          {% for category, message in messages %}
+            <div class="flash {{ 'ok' if category == 'success' else 'err' }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <div class="tabs">
+      <button type="button" class="tab-button" data-tab="wifi">Wi-Fi</button>
+      <button type="button" class="tab-button" data-tab="youtube">YouTube</button>
+      <button type="button" class="tab-button" data-tab="overlay">Overlay</button>
+      <button type="button" class="tab-button" data-tab="system">System</button>
+    </div>
+
+    <section id="tab-wifi" class="tab-panel stack">
+      <div class="grid-2">
+        <div class="card">
+          <h2>Connect `wlan1`</h2>
+          <form method="post" action="/connect" id="wifi-form">
+            <label>SSID</label>
+            <input id="ssid" name="ssid" list="ssid-list" placeholder="SSID" required>
+            <datalist id="ssid-list">
+              {% for item in wifi_list %}
+              <option value="{{ item.ssid }}"></option>
+              {% endfor %}
+            </datalist>
+
+            <label>Password</label>
+            <div class="field-row">
+              <input id="password" name="password" type="password" placeholder="Password">
+              <button id="toggle-password" class="secondary-button" type="button">Show</button>
+            </div>
+
+            <label>Auth type</label>
+            <select id="auth_type" name="auth_type">
+              <option value="wpa-psk">WPA2 / WPA mixed</option>
+              <option value="sae">WPA3-Personal</option>
+              <option value="open">Open</option>
+            </select>
+
+            <button type="submit">Connect</button>
+          </form>
+          <div id="prefill-note" class="prefill-note" aria-live="polite"></div>
+
+          <h3>Strongest networks</h3>
+          <div class="chips">
+            {% for item in top_wifi %}
+            <button
+              type="button"
+              class="chip js-prefill"
+              data-ssid="{{ item.ssid }}"
+              data-auth-type="{{ item.saved_auth_type or item.auth_type }}"
+              data-password="{{ item.saved_password_value }}">
+              {{ item.ssid }} ({{ item.signal }}%)
+              {% if item.saved_password %}<span class="saved-badge">saved</span>{% endif %}
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Link status</h2>
+          <p><strong>wlan0 IP:</strong> <span class="mono">{{ wlan0_ip }}</span></p>
+          <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
+          <p><strong>Active uplink:</strong> <span class="mono">{{ active.name or 'none' }}</span></p>
+          <p><strong>State:</strong> <span class="mono">{{ active.state }}</span></p>
+          {% if runtime %}
+          <div class="diag-grid">
+            <div class="diag-pill">
+              <strong>YouTube ping</strong>
+              <span class="mono">{{ '%.0f ms'|format(runtime.probe.youtube_ping_ms) if runtime.probe and runtime.probe.youtube_ping_ms is not none else '-' }}</span>
+            </div>
+            <div class="diag-pill">
+              <strong>RTMP TCP</strong>
+              <span class="mono">{{ '%.0f ms'|format(runtime.probe.youtube_rtmp_ms) if runtime.probe and runtime.probe.youtube_rtmp_ms is not none else '-' }}</span>
+            </div>
+            <div class="diag-pill">
+              <strong>Link RX</strong>
+              <span class="mono">{{ '%.1f KB/s'|format((runtime.rx1ps or 0) / 1024) }}</span>
+            </div>
+            <div class="diag-pill">
+              <strong>Link TX</strong>
+              <span class="mono">{{ '%.1f KB/s'|format((runtime.tx1ps or 0) / 1024) }}</span>
+            </div>
+          </div>
+          <p><strong>Connectivity:</strong> <span class="mono">{{ runtime.probe.connectivity if runtime.probe else 'unknown' }}</span></p>
+          <p><strong>Captive portal:</strong> <span class="{{ 'err' if runtime.probe and runtime.probe.portal_suspected else 'ok' if runtime.probe and runtime.probe.internet_ok else '' }}">{{ 'suspected' if runtime.probe and runtime.probe.portal_suspected else 'online' if runtime.probe and runtime.probe.internet_ok else 'offline / unknown' }}</span></p>
+          {% endif %}
+          <form method="post" action="/disconnect">
+            <button type="submit">Disconnect `wlan1`</button>
+          </form>
+        </div>
+      </div>
+
       <div class="card">
-      {% for category, message in messages %}
-        <div class="{{ 'ok' if category == 'success' else 'err' }}">{{ message }}</div>
-      {% endfor %}
+        <h2>Visible networks</h2>
+        <p>Tap a row to prefill SSID, auth type, and saved password when available.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>SSID</th>
+              <th>Security</th>
+              <th>Saved</th>
+              <th>Signal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in wifi_list %}
+            <tr
+              class="clickable js-prefill"
+              data-ssid="{{ item.ssid }}"
+              data-auth-type="{{ item.saved_auth_type or item.auth_type }}"
+              data-password="{{ item.saved_password_value }}">
+              <td data-label="SSID">{{ item.ssid }}</td>
+              <td data-label="Security">{{ item.security }}</td>
+              <td data-label="Saved">{% if item.saved_password %}Saved{% else %}-{% endif %}</td>
+              <td data-label="Signal" class="signal">{{ item.signal }}%</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
-    {% endif %}
-  {% endwith %}
+    </section>
 
-  <div class="row">
-    <div class="card">
-      <h2>Status</h2>
-      <p><strong>AP name:</strong> <span class="mono">{{ ap_name }}</span></p>
-      <p><strong>wlan0 IP:</strong> <span class="mono">{{ wlan0_ip }}</span></p>
-      <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
-      <p><strong>Active uplink:</strong> <span class="mono">{{ active.name or 'none' }}</span></p>
-      <p><strong>State:</strong> <span class="mono">{{ active.state }}</span></p>
-      {% if runtime %}
-      <div class="diag-grid">
-        <div class="diag-pill">
-          <strong>YouTube ping</strong>
-          <span class="mono">{{ '%.0f ms'|format(runtime.probe.youtube_ping_ms) if runtime.probe and runtime.probe.youtube_ping_ms is not none else '-' }}</span>
+    <section id="tab-youtube" class="tab-panel stack">
+      <div class="card">
+        <h2>YouTube Live</h2>
+        {% if not youtube_auth.client_configured %}
+        <p>Missing YouTube OAuth client config. Set <span class="mono">YOUTUBE_CLIENT_CONFIG_PATH</span> or <span class="mono">YOUTUBE_CLIENT_ID</span>.</p>
+        {% else %}
+        <p><strong>Auth:</strong> <span class="mono">{{ 'ready' if youtube_auth.authorized else 'pending' if youtube_auth.device_pending else 'not authorized' }}</span></p>
+        <p><strong>Refresh token:</strong> <span class="mono">{{ 'present' if youtube_auth.token.has_refresh_token else 'missing' }}</span></p>
+        {% if youtube_auth.authorized %}
+        <p><strong>Live access:</strong> <span class="{{ 'ok' if youtube_auth.validation.ok else 'err' }}">{{ youtube_auth.validation.message }}</span></p>
+        {% endif %}
+        {% if youtube_creation and youtube_creation.status == 'creating' %}
+        <div class="danger-box">
+          <strong>STREAM IS CREATING</strong>
+          <p class="help-text">{{ youtube_creation.message }}</p>
+          <p class="help-text">Progress: {{ youtube_creation.progress_pct or 0 }}%</p>
         </div>
-        <div class="diag-pill">
-          <strong>RTMP TCP</strong>
-          <span class="mono">{{ '%.0f ms'|format(runtime.probe.youtube_rtmp_ms) if runtime.probe and runtime.probe.youtube_rtmp_ms is not none else '-' }}</span>
+        {% endif %}
+        {% if youtube_creation_log.text or (youtube_creation and youtube_creation.log_path) %}
+        <div class="qr-card">
+          <p><strong>Create log:</strong> <span class="mono">{{ youtube_creation.log_path if youtube_creation and youtube_creation.log_path else youtube_creation_log.path }}</span></p>
+          <p class="help-text"><a href="/youtube/creation-log" target="_blank" rel="noreferrer">Open raw log</a>{% if youtube_creation_log.truncated %} · Inline view shows only the newest part of the file.{% endif %}</p>
+          {% if youtube_creation_log.text %}
+          <pre class="log-view">{{ youtube_creation_log.text }}</pre>
+          {% endif %}
         </div>
-        <div class="diag-pill">
-          <strong>Link RX</strong>
-          <span class="mono">{{ '%.1f KB/s'|format((runtime.rx1ps or 0) / 1024) }}</span>
+        {% endif %}
+        {% if youtube_auth.device_pending %}
+        <div class="qr-card">
+          <p><strong>Code:</strong> <span id="youtube-device-code" class="mono">{{ youtube_auth.device.user_code }}</span></p>
+          <p><strong>Expires at:</strong> <span id="youtube-device-expiry" class="mono" data-expires-at="{{ youtube_auth.device.expires_at or '' }}">-</span></p>
+          <p><strong>Open:</strong> <a id="youtube-device-link" class="mono" href="{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}" target="_blank" rel="noreferrer">{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}</a></p>
+          <div class="inline-button-group">
+            <button type="button" id="copy-device-code" class="secondary-button">Copy code</button>
+            <button type="button" id="copy-device-link" class="secondary-button">Copy link</button>
+            <button type="button" id="copy-device-instructions" class="secondary-button">Copy both</button>
+          </div>
+          <p id="device-code-copy-status" class="help-text"></p>
+          <form method="post" action="/youtube/device/poll">
+            <button type="submit">Check auth</button>
+          </form>
         </div>
-        <div class="diag-pill">
-          <strong>Link TX</strong>
-          <span class="mono">{{ '%.1f KB/s'|format((runtime.tx1ps or 0) / 1024) }}</span>
+        {% else %}
+        <form method="post" action="/youtube/device/start">
+          <button type="submit">Start YouTube auth</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h2>Create stream</h2>
+          <form method="post" action="/youtube/create">
+            <label>Stream title</label>
+            <input id="youtube-title" name="title" placeholder="Optional custom title">
+            <div class="chips">
+              <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }}">Use AP name</button>
+              <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }} Live">AP + Live</button>
+              <button type="button" class="chip js-title-prefill" data-title="{{ active.name or ap_name }}">Use active uplink</button>
+              <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }} {{ wlan0_ip.split('/', 1)[0] if wlan0_ip and wlan0_ip != '-' else '' }}">AP + IP</button>
+            </div>
+            <label for="youtube-audio-mode">Audio</label>
+            <select id="youtube-audio-mode" name="audio_mode">
+              {% for item in youtube_audio_modes %}
+              <option value="{{ item.value }}" {% if (youtube_creation and youtube_creation.audio_mode == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.audio_mode == item.value) or ((not youtube_stream or not youtube_stream.audio_mode) and item.value == 'normal') %}selected{% endif %}>{{ item.label }}</option>
+              {% endfor %}
+            </select>
+            <label for="youtube-rotation">Rotation</label>
+            <select id="youtube-rotation" name="rotation">
+              {% for item in youtube_rotation_modes %}
+              <option value="{{ item.value }}" {% if (youtube_creation and youtube_creation.rotation == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.rotation == item.value) or ((not youtube_stream or not youtube_stream.rotation) and item.value == '0') %}selected{% endif %}>{{ item.label }}</option>
+              {% endfor %}
+            </select>
+            <label for="youtube-fps-mode">Frame rate</label>
+            <select id="youtube-fps-mode" name="fps_mode">
+              {% for item in youtube_fps_modes %}
+              <option value="{{ item.value }}" {% if (youtube_creation and youtube_creation.fps_mode == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.fps_mode == item.value) or ((not youtube_stream or not youtube_stream.fps_mode) and item.value == 'original') %}selected{% endif %}>{{ item.label }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" {% if not youtube_ready or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
+          </form>
+          <p class="help-text">If overlay is enabled, the relay will transcode video so the HTML-rendered PNG can be composited.</p>
+        </div>
+
+        <div class="card">
+          <h2>Manage stream</h2>
+          {% if youtube_stream %}
+          <p><strong>Title:</strong> <span class="mono">{{ youtube_stream.title }}</span></p>
+          <p><strong>Privacy:</strong> <span class="mono">{{ youtube_stream.privacy_status or 'public' }}</span></p>
+          <p><strong>Mode:</strong> <span class="mono">{{ youtube_stream.mode }}</span></p>
+          {% if youtube_stream.watch_url %}
+          <p><strong>Watch:</strong> <a href="{{ youtube_stream.watch_url }}" target="_blank" rel="noreferrer">{{ youtube_stream.watch_url }}</a></p>
+          {% endif %}
+          {% if youtube_stream.proxy_publish_url %}
+          <p><strong>Publish URL:</strong> <span class="mono">{{ youtube_stream.proxy_publish_url }}</span></p>
+          <p><strong>Relay target:</strong> <span class="mono">{{ youtube_stream.target_url }}</span></p>
+          <p><strong>Relay listen:</strong> <span class="mono">{{ youtube_stream.proxy_listen_url }}</span></p>
+          <p><strong>Audio mode:</strong> <span class="mono">{{ youtube_stream.audio_mode_label }}</span></p>
+          <p><strong>Rotation:</strong> <span class="mono">{{ youtube_stream.rotation_label or 'Off' }}</span></p>
+          <p><strong>FPS:</strong> <span class="mono">{{ youtube_stream.fps_mode_label or 'Original' }}</span></p>
+          {% if youtube_stream.relay %}
+          <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
+          <p><strong>Video encoder:</strong> <span class="mono">{{ youtube_stream.relay.video_encoder_label or youtube_stream.relay.video_encoder or 'copy' }}</span></p>
+          <p><strong>Video:</strong> <span class="mono">{% if youtube_stream.relay.video_width and youtube_stream.relay.video_height %}{{ youtube_stream.relay.video_width }}x{{ youtube_stream.relay.video_height }} ({{ youtube_stream.relay.video_orientation or 'unknown' }}){% else %}waiting for incoming stream{% endif %}</span></p>
+          <p><strong>Overlay:</strong> <span class="mono">{{ 'enabled' if youtube_stream.relay.overlay_enabled else 'disabled' }}</span></p>
+          <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
+          {% endif %}
+          <form method="post" action="/youtube/audio-mode">
+            <div class="button-row">
+              {% for item in youtube_audio_modes %}
+              <button type="submit" name="mode" value="{{ item.value }}" class="secondary-button {{ 'mode-active' if youtube_stream.audio_mode == item.value else '' }}">{{ item.label }}</button>
+              {% endfor %}
+            </div>
+          </form>
+          <form method="post" action="/youtube/rotation">
+            <div class="button-row">
+              {% for item in youtube_rotation_modes %}
+              <button type="submit" name="mode" value="{{ item.value }}" class="secondary-button {{ 'mode-active' if youtube_stream.rotation == item.value else '' }}">{{ item.label }}</button>
+              {% endfor %}
+            </div>
+          </form>
+          <form method="post" action="/youtube/fps-mode">
+            <div class="button-row">
+              {% for item in youtube_fps_modes %}
+              <button type="submit" name="mode" value="{{ item.value }}" class="secondary-button {{ 'mode-active' if youtube_stream.fps_mode == item.value else '' }}">{{ item.label }}</button>
+              {% endfor %}
+            </div>
+          </form>
+          {% else %}
+          <p class="help-text">No YouTube stream created yet.</p>
+          {% endif %}
         </div>
       </div>
-      <p><strong>Connectivity:</strong> <span class="mono">{{ runtime.probe.connectivity if runtime.probe else 'unknown' }}</span></p>
-      <p><strong>Captive portal:</strong> <span class="{{ 'err' if runtime.probe and runtime.probe.portal_suspected else 'ok' if runtime.probe and runtime.probe.internet_ok else '' }}">{{ 'suspected' if runtime.probe and runtime.probe.portal_suspected else 'online' if runtime.probe and runtime.probe.internet_ok else 'offline / unknown' }}</span></p>
-      {% if runtime.probe and runtime.probe.portal_capture and runtime.probe.portal_capture.html_path %}
-      <p><strong>Portal HTML:</strong> <span class="mono">{{ runtime.probe.portal_capture.html_path }}</span></p>
-      {% endif %}
-      {% if portal_ack_available %}
-      <form method="post" action="/portal-ack" style="margin-top:12px;">
-        <button type="submit" class="secondary-button">Run portal action</button>
-      </form>
-      {% endif %}
-      {% endif %}
-      <h3>Software update</h3>
-      <p><strong>Script:</strong> <span class="mono">{{ update_status.script_path }}</span></p>
-      <p><strong>Update job:</strong> <span class="{{ update_status.status_class }}">{{ update_status.summary }}</span></p>
-      {% if update_status.last_started %}
-      <p><strong>Last start:</strong> <span class="mono">{{ update_status.last_started }}</span></p>
-      {% endif %}
-      {% if not update_status.service_installed %}
-      <p class="err">Install <span class="mono">{{ update_status.service_name }}</span> before using this button.</p>
-      {% elif not update_status.script_exists %}
-      <p class="err">Script not found on this host.</p>
-      {% else %}
-      <p class="help-text">Runs in its own systemd service so the web UI can restart safely during install.</p>
-      {% endif %}
-      <form method="post" action="/update" style="margin-top:12px;">
-        <button type="submit" {% if not update_status.can_start %}disabled{% endif %}>
-          {{ "Update running..." if update_status.running else "Run update script" }}
-        </button>
-      </form>
-      <p class="help-text">Logs: <span class="mono">journalctl -u {{ update_status.service_name }} -n 50</span></p>
-      <form method="post" action="/disconnect">
-        <button type="submit">Disconnect wlan1</button>
-      </form>
-    </div>
+    </section>
 
-    <div class="card">
-      <h2>Connect wlan1</h2>
-      <form method="post" action="/connect" id="wifi-form">
-        <label>SSID</label>
-        <input id="ssid" name="ssid" list="ssid-list" placeholder="SSID" required>
-        <datalist id="ssid-list">
-          {% for item in wifi_list %}
-          <option value="{{ item.ssid }}"></option>
-          {% endfor %}
-        </datalist>
-
-        <label>Password</label>
-        <div class="field-row">
-          <input id="password" name="password" type="password" placeholder="Password">
-          <button id="toggle-password" class="secondary-button" type="button">Show</button>
+    <section id="tab-overlay" class="tab-panel stack">
+      <div class="grid-2">
+        <div class="card">
+          <h2>Overlay config</h2>
+          <form method="post" action="/overlay/save">
+            <div class="checkbox-row">
+              <input id="overlay-enabled" name="enabled" type="checkbox" {% if overlay.enabled %}checked{% endif %}>
+              <label for="overlay-enabled">Enable overlay in proxy relay</label>
+            </div>
+            <div class="grid-2">
+              <div>
+                <label>X</label>
+                <input name="x" type="number" min="0" value="{{ overlay.x }}">
+              </div>
+              <div>
+                <label>Y</label>
+                <input name="y" type="number" min="0" value="{{ overlay.y }}">
+              </div>
+              <div>
+                <label>Width</label>
+                <input name="width" type="number" min="32" value="{{ overlay.width }}">
+              </div>
+              <div>
+                <label>Height</label>
+                <input name="height" type="number" min="32" value="{{ overlay.height }}">
+              </div>
+              <div>
+                <label>Opacity</label>
+                <input name="opacity" type="number" min="0" max="1" step="0.05" value="{{ overlay.opacity }}">
+              </div>
+              <div>
+                <label>Refresh sec</label>
+                <input name="refresh_sec" type="number" min="5" max="3600" value="{{ overlay.refresh_sec }}">
+              </div>
+            </div>
+            <label>HTML template</label>
+            <textarea name="html">{{ overlay_html }}</textarea>
+            <div class="button-row">
+              <button type="submit">Save overlay</button>
+              <button type="submit" formaction="/overlay/render" formmethod="post" class="secondary-button">Render preview now</button>
+            </div>
+          </form>
+          <p class="help-text">Template is rendered server-side, then Chromium snapshots it to a transparent PNG.</p>
+          <p class="help-text">Useful variables: <span class="mono">ap_name</span>, <span class="mono">active.name</span>, <span class="mono">active.state</span>, <span class="mono">wlan0_ip</span>, <span class="mono">wlan1_ip</span>, <span class="mono">now_local</span>, <span class="mono">runtime</span>.</p>
         </div>
 
-        <label>Auth type</label>
-        <select id="auth_type" name="auth_type">
-          <option value="wpa-psk">WPA2 / WPA mixed</option>
-          <option value="sae">WPA3-Personal</option>
-          <option value="open">Open</option>
-        </select>
-
-        <button type="submit">Connect</button>
-      </form>
-      <div id="prefill-note" class="prefill-note" aria-live="polite"></div>
-
-      <h3>Strongest networks</h3>
-      <div class="chips">
-        {% for item in top_wifi %}
-        <button
-          type="button"
-          class="chip js-prefill"
-          data-ssid="{{ item.ssid }}"
-          data-auth-type="{{ item.saved_auth_type or item.auth_type }}"
-          data-password="{{ item.saved_password_value }}">
-          {{ item.ssid }} ({{ item.signal }}%)
-          {% if item.saved_password %}<span class="saved-badge">saved</span>{% endif %}
-        </button>
-        {% endfor %}
+        <div class="card">
+          <h2>Overlay preview</h2>
+          <p><strong>HTML path:</strong> <span class="mono">{{ overlay.html_path }}</span></p>
+          <p><strong>PNG path:</strong> <span class="mono">{{ overlay.png_path }}</span></p>
+          <p><strong>Last render:</strong> <span class="mono">{{ overlay.last_rendered_at if overlay.last_rendered_at else 'never' }}</span></p>
+          <p><strong>Render error:</strong> <span class="{{ 'err' if overlay.last_render_error else 'ok' }}">{{ overlay.last_render_error or 'none' }}</span></p>
+          <div class="overlay-preview">
+            {% if overlay.png_exists %}
+            <img src="/overlay/preview?ts={{ overlay.png_mtime }}" alt="Overlay preview">
+            {% else %}
+            <p class="help-text">No PNG preview yet.</p>
+            {% endif %}
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
+    </section>
 
-  <div class="card" style="margin-top:16px;">
-    <h2>YouTube Live</h2>
-    {% if not youtube_auth.client_configured %}
-    <p>Missing YouTube OAuth client config. Set <span class="mono">YOUTUBE_CLIENT_CONFIG_PATH</span> or <span class="mono">YOUTUBE_CLIENT_ID</span>.</p>
-    {% else %}
-    <p><strong>Auth:</strong> <span class="mono">{{ 'ready' if youtube_auth.authorized else 'pending' if youtube_auth.device_pending else 'not authorized' }}</span></p>
-    <p><strong>Refresh token:</strong> <span class="mono">{{ 'present' if youtube_auth.token.has_refresh_token else 'missing' }}</span></p>
-    {% if youtube_auth.authorized %}
-    <p>
-      <strong>Live access:</strong>
-      <span class="{{ 'ok' if youtube_auth.validation.ok else 'err' }}">
-        {{ youtube_auth.validation.message }}
-      </span>
-    </p>
-    {% endif %}
-    {% if youtube_creation and youtube_creation.status == 'creating' %}
-    <div class="danger-box">
-      <strong>STREAM IS CREATING</strong>
-      <p class="help-text">{{ youtube_creation.message }}</p>
-      <p class="help-text">Progress: {{ youtube_creation.progress_pct or 0 }}%</p>
-      <p class="help-text">Please wait before starting another stream.</p>
-    </div>
-    {% endif %}
-    {% if youtube_creation_log.text or (youtube_creation and youtube_creation.log_path) %}
-    <div class="qr-card">
-      <p><strong>Create log:</strong> <span class="mono">{{ youtube_creation.log_path if youtube_creation and youtube_creation.log_path else youtube_creation_log.path }}</span></p>
-      <p class="help-text">
-        <a href="/youtube/creation-log" target="_blank" rel="noreferrer">Open raw log</a>
-        {% if youtube_creation_log.truncated %} · Inline view shows only the newest part of the file.{% endif %}
-      </p>
-      {% if youtube_creation_log.text %}
-      <pre class="log-view">{{ youtube_creation_log.text }}</pre>
-      {% else %}
-      <p class="help-text">The log file exists but is currently empty.</p>
-      {% endif %}
-    </div>
-    {% endif %}
-    {% if youtube_auth.device_pending %}
-    <div class="qr-card">
-      <p>
-        <strong>Code:</strong>
-        <span id="youtube-device-code" class="mono code-copy" title="Click to copy">{{ youtube_auth.device.user_code }}</span>
-        <button type="button" id="copy-device-code" class="inline-button">Copy</button>
-      </p>
-      <p><strong>Expires at:</strong> <span id="youtube-device-expiry" class="mono" data-expires-at="{{ youtube_auth.device.expires_at or '' }}">-</span></p>
-      <p>
-        <strong>Open:</strong>
-        <a
-          id="youtube-device-link"
-          class="mono"
-          href="{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}"
-          target="_blank"
-          rel="noreferrer"
-        >{{ youtube_auth.device.verification_url_complete or youtube_auth.device.verification_url }}</a>
-      </p>
-      <div class="inline-button-group">
-        <button type="button" id="copy-device-link" class="inline-button">Copy link</button>
-        <button type="button" id="copy-device-instructions" class="inline-button">Copy code + link</button>
+    <section id="tab-system" class="tab-panel stack">
+      <div class="grid-2">
+        <div class="card">
+          <h2>System status</h2>
+          <p><strong>AP name:</strong> <span class="mono">{{ ap_name }}</span></p>
+          <p><strong>wlan0 IP:</strong> <span class="mono">{{ wlan0_ip }}</span></p>
+          <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
+          {% if runtime.probe and runtime.probe.portal_capture and runtime.probe.portal_capture.html_path %}
+          <p><strong>Portal HTML:</strong> <span class="mono">{{ runtime.probe.portal_capture.html_path }}</span></p>
+          {% endif %}
+          {% if portal_ack_available %}
+          <form method="post" action="/portal-ack">
+            <button type="submit" class="secondary-button">Run portal action</button>
+          </form>
+          {% endif %}
+        </div>
+
+        <div class="card">
+          <h2>Software update</h2>
+          <p><strong>Script:</strong> <span class="mono">{{ update_status.script_path }}</span></p>
+          <p><strong>Update job:</strong> <span class="{{ update_status.status_class }}">{{ update_status.summary }}</span></p>
+          {% if update_status.last_started %}
+          <p><strong>Last start:</strong> <span class="mono">{{ update_status.last_started }}</span></p>
+          {% endif %}
+          <form method="post" action="/update">
+            <button type="submit" {% if not update_status.can_start %}disabled{% endif %}>{{ "Update running..." if update_status.running else "Run update script" }}</button>
+          </form>
+          <p class="help-text">Logs: <span class="mono">journalctl -u {{ update_status.service_name }} -n 50</span></p>
+        </div>
       </div>
-      <p id="device-code-copy-status" class="help-text"></p>
-      <p class="help-text">Authorize the Pi once, then return here and press "Check auth".</p>
-      <form method="post" action="/youtube/device/poll" class="stack-form">
-        <button type="submit">Check auth</button>
-      </form>
-    </div>
-    {% else %}
-    <form method="post" action="/youtube/device/start" class="stack-form">
-      <button type="submit">Start YouTube auth</button>
-    </form>
-    {% endif %}
-
-    <form method="post" action="/youtube/create" class="stack-form">
-      <label>Stream title</label>
-      <input id="youtube-title" name="title" placeholder="Optional custom title">
-      <div class="chips">
-        <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }}">Use AP name</button>
-        <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }} Live">AP + Live</button>
-        <button type="button" class="chip js-title-prefill" data-title="{{ active.name or ap_name }}">Use active uplink</button>
-        <button type="button" class="chip js-title-prefill" data-title="{{ ap_name }} {{ wlan0_ip.split('/', 1)[0] if wlan0_ip and wlan0_ip != '-' else '' }}">AP + IP</button>
-      </div>
-      <label for="youtube-audio-mode">Audio</label>
-      <select id="youtube-audio-mode" name="audio_mode">
-        {% for item in youtube_audio_modes %}
-        <option
-          value="{{ item.value }}"
-          {% if (youtube_creation and youtube_creation.audio_mode == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.audio_mode == item.value) or ((not youtube_stream or not youtube_stream.audio_mode) and item.value == 'normal') %}selected{% endif %}
-        >{{ item.label }}</option>
-        {% endfor %}
-      </select>
-      <p class="help-text">This becomes the initial relay audio mode for the new stream. You can still change it later from Manage Stream.</p>
-      <label for="youtube-rotation">Rotation</label>
-      <select id="youtube-rotation" name="rotation">
-        {% for item in youtube_rotation_modes %}
-        <option
-          value="{{ item.value }}"
-          {% if (youtube_creation and youtube_creation.rotation == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.rotation == item.value) or ((not youtube_stream or not youtube_stream.rotation) and item.value == '0') %}selected{% endif %}
-        >{{ item.label }}</option>
-        {% endfor %}
-      </select>
-      <p class="help-text">Rotate 90 and Rotate -90 re-encode video in the proxy relay. On a Pi 4B this now prefers the hardware H.264 encoder when FFmpeg exposes it; Off keeps the copy-video path.</p>
-      <label for="youtube-fps-mode">Frame rate</label>
-      <select id="youtube-fps-mode" name="fps_mode">
-        {% for item in youtube_fps_modes %}
-        <option
-          value="{{ item.value }}"
-          {% if (youtube_creation and youtube_creation.fps_mode == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.fps_mode == item.value) or ((not youtube_stream or not youtube_stream.fps_mode) and item.value == 'original') %}selected{% endif %}
-        >{{ item.label }}</option>
-        {% endfor %}
-      </select>
-      <p class="help-text">Original keeps the incoming frame rate. 30 and 20 FPS cap the relay output and can reduce CPU load when the relay is transcoding.</p>
-      <button type="submit" {% if not youtube_ready or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
-    </form>
-
-    {% if youtube_stream %}
-    <div class="qr-card">
-      <p><strong>Title:</strong> <span class="mono">{{ youtube_stream.title }}</span></p>
-      <p><strong>Privacy:</strong> <span class="mono">{{ youtube_stream.privacy_status or 'public' }}</span></p>
-      <p><strong>Mode:</strong> <span class="mono">{{ youtube_stream.mode }}</span></p>
-      {% if youtube_stream.watch_url %}
-      <p><strong>Watch:</strong> <a href="{{ youtube_stream.watch_url }}" target="_blank" rel="noreferrer">{{ youtube_stream.watch_url }}</a></p>
-      {% endif %}
-      {% if youtube_stream.proxy_publish_url %}
-      <p><strong>Publish URL:</strong> <span class="mono">{{ youtube_stream.proxy_publish_url }}</span></p>
-      <p><strong>Relay target:</strong> <span class="mono">{{ youtube_stream.target_url }}</span></p>
-      <p><strong>Relay listen:</strong> <span class="mono">{{ youtube_stream.proxy_listen_url }}</span></p>
-      <p><strong>Audio mode:</strong> <span class="mono">{{ youtube_stream.audio_mode_label }}</span></p>
-      <p><strong>Rotation:</strong> <span class="mono">{{ youtube_stream.rotation_label or 'Off' }}</span></p>
-      <p><strong>FPS:</strong> <span class="mono">{{ youtube_stream.fps_mode_label or 'Original' }}</span></p>
-      <p class="help-text">{{ youtube_stream.audio_mode_description }}</p>
-      <p class="help-text">{{ youtube_stream.rotation_description }}</p>
-      <p class="help-text">{{ youtube_stream.fps_mode_description }}</p>
-      {% if youtube_stream.relay %}
-      <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
-      <p><strong>Video encoder:</strong> <span class="mono">{{ youtube_stream.relay.video_encoder_label or youtube_stream.relay.video_encoder or 'copy' }}</span></p>
-      <p><strong>Video:</strong> <span class="mono">{% if youtube_stream.relay.video_width and youtube_stream.relay.video_height %}{{ youtube_stream.relay.video_width }}x{{ youtube_stream.relay.video_height }} ({{ youtube_stream.relay.video_orientation or 'unknown' }}){% else %}waiting for incoming stream{% endif %}</span></p>
-      <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
-      {% endif %}
-      <form method="post" action="/youtube/audio-mode" class="stack-form">
-        <div class="button-row">
-          {% for item in youtube_audio_modes %}
-          <button
-            type="submit"
-            name="mode"
-            value="{{ item.value }}"
-            class="secondary-button {{ 'mode-active' if youtube_stream.audio_mode == item.value else '' }}"
-          >{{ item.label }}</button>
-          {% endfor %}
-        </div>
-      </form>
-      <form method="post" action="/youtube/rotation" class="stack-form">
-        <div class="button-row">
-          {% for item in youtube_rotation_modes %}
-          <button
-            type="submit"
-            name="mode"
-            value="{{ item.value }}"
-            class="secondary-button {{ 'mode-active' if youtube_stream.rotation == item.value else '' }}"
-          >{{ item.label }}</button>
-          {% endfor %}
-        </div>
-      </form>
-      <form method="post" action="/youtube/fps-mode" class="stack-form">
-        <div class="button-row">
-          {% for item in youtube_fps_modes %}
-          <button
-            type="submit"
-            name="mode"
-            value="{{ item.value }}"
-            class="secondary-button {{ 'mode-active' if youtube_stream.fps_mode == item.value else '' }}"
-          >{{ item.label }}</button>
-          {% endfor %}
-        </div>
-      </form>
-      <p class="help-text">Voice Focus only biases the mix toward speech. It is not a true voices-only separator, and mode changes are applied live without restarting the relay.</p>
-      <p class="help-text">Rotation changes restart the proxy relay, so expect a brief reconnect when switching between Off, Rotate 90, and Rotate -90.</p>
-      <p class="help-text">FPS changes also restart the proxy relay. Use Original for passthrough, or 20 FPS as a lower-CPU option for walking/vlogging.</p>
-      {% else %}
-      <p><strong>RTMPS server:</strong> <span class="mono">{{ youtube_stream.rtmps_ingestion_address or youtube_stream.ingestion_address }}</span></p>
-      <p><strong>Stream key:</strong> <span class="mono">{{ youtube_stream.stream_name }}</span></p>
-      {% endif %}
-    </div>
-    {% endif %}
-    {% endif %}
-  </div>
-
-  <div class="card" style="margin-top:16px;">
-    <h2>Visible networks</h2>
-    <p>Tap a row to prefill SSID, auth type, and saved password when available.</p>
-    <table>
-      <thead>
-        <tr>
-          <th>SSID</th>
-          <th>Security</th>
-          <th>Saved</th>
-          <th>Signal</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for item in wifi_list %}
-        <tr
-          class="clickable js-prefill"
-          data-ssid="{{ item.ssid }}"
-          data-auth-type="{{ item.saved_auth_type or item.auth_type }}"
-          data-password="{{ item.saved_password_value }}">
-          <td data-label="SSID">{{ item.ssid }}</td>
-          <td data-label="Security">{{ item.security }}</td>
-          <td data-label="Saved">{% if item.saved_password %}Saved{% else %}-{% endif %}</td>
-          <td data-label="Signal" class="signal">{{ item.signal }}%</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    </section>
   </div>
 
 <script>
@@ -614,16 +720,36 @@ function prefillWifi(ssid, authType, password) {
   }
 
   document.getElementById("password").focus();
-  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-document.getElementById("toggle-password").addEventListener("click", () => {
-  const passwordInput = document.getElementById("password");
-  const toggleButton = document.getElementById("toggle-password");
-  const showPassword = passwordInput.type === "password";
-  passwordInput.type = showPassword ? "text" : "password";
-  toggleButton.textContent = showPassword ? "Hide" : "Show";
+function setActiveTab(tabId) {
+  document.querySelectorAll(".tab-button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tab === tabId);
+  });
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.id === `tab-${tabId}`);
+  });
+  const url = new URL(window.location.href);
+  url.searchParams.set("tab", tabId);
+  window.history.replaceState({}, "", url);
+}
+
+document.querySelectorAll(".tab-button").forEach((button) => {
+  button.addEventListener("click", () => setActiveTab(button.dataset.tab));
 });
+
+const initialTab = new URLSearchParams(window.location.search).get("tab") || "wifi";
+setActiveTab(initialTab);
+
+const togglePassword = document.getElementById("toggle-password");
+if (togglePassword) {
+  togglePassword.addEventListener("click", () => {
+    const passwordInput = document.getElementById("password");
+    const showPassword = passwordInput.type === "password";
+    passwordInput.type = showPassword ? "text" : "password";
+    togglePassword.textContent = showPassword ? "Hide" : "Show";
+  });
+}
 
 async function copyTextToClipboard(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -731,6 +857,7 @@ document.querySelectorAll(".js-prefill").forEach((element) => {
       element.dataset.authType || "wpa-psk",
       element.dataset.password || ""
     );
+    setActiveTab("wifi");
   });
 });
 </script>

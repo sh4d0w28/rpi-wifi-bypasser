@@ -1,6 +1,18 @@
 # Raspberry Pi AP tools bundle v2 (Waveshare 1.44inch LCD HAT)
 
 Changes in this version:
+- Web UI is split into tabs:
+  - `Wi-Fi`
+  - `YouTube`
+  - `Overlay`
+  - `System`
+- Added HTML-to-PNG stream overlay support:
+  - Web UI stores an overlay HTML template plus layout settings
+  - a background renderer snapshots that HTML to a transparent PNG on a timer
+  - the YouTube proxy relay can composite that PNG onto outgoing video
+  - HTML/CSS rendering is treated as an authoring step; the relay itself receives PNG frames
+  - changing overlay content updates live without recreating the YouTube stream bundle
+  - changing overlay geometry or opacity reloads the running proxy relay briefly
 - Web UI table is mobile-friendly
 - Clicking a Wi-Fi row prefills:
   - SSID
@@ -120,6 +132,14 @@ YouTube config:
   - `YOUTUBE_PROXY_HW_VIDEO_ENCODER` (default: `h264_v4l2m2m`)
   - `YOUTUBE_PROXY_HW_VIDEO_BITRATE` (default: `6000k`)
   - `YOUTUBE_RELAY_LOG_PATH`
+  - overlay paths and rendering:
+    - `YOUTUBE_OVERLAY_STATE_PATH`
+    - `YOUTUBE_OVERLAY_HTML_PATH`
+    - `YOUTUBE_OVERLAY_PNG_PATH`
+    - `YOUTUBE_OVERLAY_RENDER_HTML_PATH`
+    - `YOUTUBE_OVERLAY_BROWSER_BIN`
+    - `YOUTUBE_OVERLAY_FRAME_INTERVAL_SEC`
+  - the overlay renderer currently expects a Chromium-compatible browser on the Pi such as `chromium-browser` or `chromium`
 
 Screen map:
 

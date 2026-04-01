@@ -2,19 +2,27 @@
 import json
 import os
 import re
+import shutil
 import subprocess
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
-from flask import Flask, Response, render_template, request, redirect, url_for, flash
+from flask import Flask, Response, flash, redirect, render_template, render_template_string, request, send_file, url_for
 from youtube_live import (
+    DEFAULT_OVERLAY_HTML,
     YouTubeLiveError,
+    ensure_overlay_html_exists,
     get_auth_status,
     list_audio_modes,
     list_fps_modes,
     list_rotation_modes,
     load_creation_log,
     load_creation_state,
+    load_overlay_state,
     load_stream_state,
+    refresh_proxy_overlay,
+    save_overlay_state,
     set_proxy_audio_mode,
     set_proxy_fps_mode,
     set_proxy_rotation_mode,
@@ -35,7 +43,11 @@ UPDATE_SERVICE_NAME = os.environ.get("UPDATE_SERVICE_NAME", "rpi-ap-update.servi
 UPDATE_SCRIPT_PATH = Path("/home/pi/update_ap.sh")
 WIFI_SCAN_CACHE_SEC = float(os.environ.get("WIFI_SCAN_CACHE_SEC", "10.0"))
 WIFI_RESCAN_MIN_INTERVAL_SEC = float(os.environ.get("WIFI_RESCAN_MIN_INTERVAL_SEC", "30.0"))
+OVERLAY_RENDER_HTML_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_RENDER_HTML_PATH", "/run/rpi_ap_tools_youtube_overlay_rendered.html"))
+OVERLAY_RENDERER_BIN = os.environ.get("YOUTUBE_OVERLAY_BROWSER_BIN", "").strip()
 SCAN_CACHE = {"rows": [], "cached_at": 0.0, "rescanned_at": 0.0}
+OVERLAY_RENDER_LOCK = threading.Lock()
+OVERLAY_RENDERER_THREAD = None
 
 
 def run(cmd, check=True):
@@ -243,6 +255,109 @@ def load_runtime_status():
     return data if isinstance(data, dict) else {}
 
 
+def overlay_html_path():
+    return Path(load_overlay_state().get("html_path") or "")
+
+
+def overlay_png_path():
+    return Path(load_overlay_state().get("png_path") or "")
+
+
+def load_overlay_html():
+    ensure_overlay_html_exists()
+    path = overlay_html_path()
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return DEFAULT_OVERLAY_HTML
+
+
+def save_overlay_html(text):
+    path = overlay_html_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _overlay_template_context():
+    runtime = load_runtime_status()
+    return {
+        "ap_name": get_ap_name(),
+        "active": get_active_connection(),
+        "runtime": runtime,
+        "wlan0_ip": get_ip("wlan0"),
+        "wlan1_ip": get_ip(WLAN_IFACE),
+        "now_local": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def _overlay_renderer_bin():
+    if OVERLAY_RENDERER_BIN:
+        return OVERLAY_RENDERER_BIN
+    for candidate in ("chromium-browser", "chromium", "google-chrome", "google-chrome-stable"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return ""
+
+
+def render_overlay_png(force=False):
+    with OVERLAY_RENDER_LOCK:
+        overlay = load_overlay_state()
+        html_source = load_overlay_html()
+        if not overlay.get("enabled") and not force:
+            return False, "Overlay disabled"
+        renderer_bin = _overlay_renderer_bin()
+        if not renderer_bin:
+            overlay["last_render_error"] = "No Chromium-compatible browser found"
+            save_overlay_state(overlay)
+            return False, overlay["last_render_error"]
+        with APP.app_context():
+            rendered_html = render_template_string(html_source, **_overlay_template_context())
+        OVERLAY_RENDER_HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
+        OVERLAY_RENDER_HTML_PATH.write_text(rendered_html, encoding="utf-8")
+        png_path = Path(overlay["png_path"])
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            renderer_bin,
+            "--headless",
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--default-background-color=00000000",
+            f"--window-size={overlay['width']},{overlay['height']}",
+            f"--screenshot={png_path}",
+            OVERLAY_RENDER_HTML_PATH.as_uri(),
+        ]
+        proc = subprocess.run(cmd, text=True, capture_output=True, check=False, timeout=30)
+        if proc.returncode != 0:
+            message = proc.stderr.strip() or proc.stdout.strip() or "Overlay render failed"
+            overlay["last_render_error"] = message
+            save_overlay_state(overlay)
+            return False, message
+        overlay["last_render_error"] = ""
+        overlay["last_rendered_at"] = time.time()
+        save_overlay_state(overlay)
+        return True, f"Overlay rendered to {png_path}"
+
+
+def _overlay_renderer_loop():
+    while True:
+        overlay = load_overlay_state()
+        refresh_sec = max(5, int(overlay.get("refresh_sec") or 10))
+        last_rendered_at = float(overlay.get("last_rendered_at") or 0)
+        if overlay.get("enabled") and time.time() - last_rendered_at >= refresh_sec:
+            render_overlay_png(force=True)
+        time.sleep(1.0)
+
+
+def start_overlay_renderer_thread():
+    global OVERLAY_RENDERER_THREAD
+    if OVERLAY_RENDERER_THREAD and OVERLAY_RENDERER_THREAD.is_alive():
+        return
+    ensure_overlay_html_exists()
+    OVERLAY_RENDERER_THREAD = threading.Thread(target=_overlay_renderer_loop, name="overlay-renderer", daemon=True)
+    OVERLAY_RENDERER_THREAD.start()
+
+
 def run_portal_ack():
     if not CAPTIVE_PORTAL_ACK_CMD:
         return False, "No captive portal action configured"
@@ -370,6 +485,7 @@ def start_update_service():
 def index():
     wifi_list = scan_wifi()
     runtime = load_runtime_status()
+    overlay = load_overlay_state()
     youtube_auth = get_auth_status()
     youtube_creation = load_creation_state()
     youtube_creation_log = load_creation_log()
@@ -398,6 +514,8 @@ def index():
         youtube_audio_modes=list_audio_modes(),
         youtube_fps_modes=list_fps_modes(),
         youtube_rotation_modes=list_rotation_modes(),
+        overlay=overlay,
+        overlay_html=load_overlay_html(),
     )
 
 
@@ -449,6 +567,50 @@ def update():
     ok, msg = start_update_service()
     flash(msg, "success" if ok else "error")
     return redirect(url_for("index"))
+
+
+@APP.route("/overlay/save", methods=["POST"])
+def overlay_save():
+    current = load_overlay_state()
+    previous_structural = {key: current.get(key) for key in ("enabled", "x", "y", "width", "height", "opacity")}
+    updated = {
+        **current,
+        "enabled": request.form.get("enabled") == "on",
+        "x": request.form.get("x", current.get("x")),
+        "y": request.form.get("y", current.get("y")),
+        "width": request.form.get("width", current.get("width")),
+        "height": request.form.get("height", current.get("height")),
+        "opacity": request.form.get("opacity", current.get("opacity")),
+        "refresh_sec": request.form.get("refresh_sec", current.get("refresh_sec")),
+    }
+    save_overlay_state(updated)
+    save_overlay_html(request.form.get("html", load_overlay_html()))
+    ok, message = render_overlay_png(force=True)
+    flash(message, "success" if ok else "error")
+    new_state = load_overlay_state()
+    new_structural = {key: new_state.get(key) for key in ("enabled", "x", "y", "width", "height", "opacity")}
+    if previous_structural != new_structural:
+        try:
+            refresh_proxy_overlay()
+            flash("Running relay reloaded with new overlay layout.", "success")
+        except YouTubeLiveError:
+            pass
+    return redirect(url_for("index", tab="overlay"))
+
+
+@APP.route("/overlay/render", methods=["POST"])
+def overlay_render():
+    ok, message = render_overlay_png(force=True)
+    flash(message, "success" if ok else "error")
+    return redirect(url_for("index", tab="overlay"))
+
+
+@APP.route("/overlay/preview", methods=["GET"])
+def overlay_preview():
+    path = overlay_png_path()
+    if not path.is_file():
+        return Response("No overlay PNG rendered yet.\n", mimetype="text/plain", status=404)
+    return send_file(path, mimetype="image/png", max_age=0)
 
 
 @APP.route("/youtube/device/start", methods=["POST"])
@@ -547,6 +709,9 @@ def youtube_creation_log():
     if not text:
         text = f"No creation log yet.\nExpected path: {payload.get('path', '-')}\n"
     return Response(text, mimetype="text/plain")
+
+
+start_overlay_renderer_thread()
 
 
 if __name__ == "__main__":

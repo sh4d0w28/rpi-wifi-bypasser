@@ -32,6 +32,9 @@ STREAM_CREATE_LOCK_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_LOCK_PATH",
 CREATION_LOG_PATH = Path(os.environ.get("YOUTUBE_CREATE_LOG_PATH", "/run/rpi_ap_tools_youtube_create.log"))
 RELAY_STATE_PATH = Path(os.environ.get("YOUTUBE_RELAY_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_relay.json"))
 RELAY_LOG_PATH = Path(os.environ.get("YOUTUBE_RELAY_LOG_PATH", "/run/rpi_ap_tools_youtube_relay.log"))
+OVERLAY_STATE_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_overlay.json"))
+OVERLAY_HTML_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_HTML_PATH", "/var/lib/rpi_ap_tools/youtube_overlay.html"))
+OVERLAY_PNG_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_PNG_PATH", "/run/rpi_ap_tools_youtube_overlay.png"))
 STREAM_TITLE_PREFIX = os.environ.get("YOUTUBE_STREAM_TITLE_PREFIX", "RPi Live").strip() or "RPi Live"
 STREAM_PRIVACY_STATUS = os.environ.get("YOUTUBE_STREAM_PRIVACY_STATUS", "public").strip() or "public"
 PROXY_ENABLED = os.environ.get("YOUTUBE_PROXY_ENABLED", "1").strip().lower() not in ("0", "false", "no")
@@ -114,11 +117,112 @@ PROXY_VIDEO_CRF = str(os.environ.get("YOUTUBE_PROXY_VIDEO_CRF", "18") or "18").s
 PROXY_VIDEO_ENCODER = os.environ.get("YOUTUBE_PROXY_VIDEO_ENCODER", "auto").strip().lower() or "auto"
 PROXY_HW_VIDEO_ENCODER = os.environ.get("YOUTUBE_PROXY_HW_VIDEO_ENCODER", "h264_v4l2m2m").strip() or "h264_v4l2m2m"
 PROXY_HW_VIDEO_BITRATE = str(os.environ.get("YOUTUBE_PROXY_HW_VIDEO_BITRATE", "6000k") or "6000k").strip()
+OVERLAY_FRAME_INTERVAL_SEC = max(0.2, float(os.environ.get("YOUTUBE_OVERLAY_FRAME_INTERVAL_SEC", "1.0") or "1.0"))
 ZMQ_REQ = 3
 ZMQ_LINGER = 17
 ZMQ_RCVTIMEO = 27
 ZMQ_SNDTIMEO = 28
 _ENCODER_CACHE = None
+DEFAULT_OVERLAY_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+    .overlay-root {
+      width: 100%;
+      height: 100%;
+      padding: 24px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: flex-start;
+      box-sizing: border-box;
+    }
+    .panel {
+      min-width: 260px;
+      max-width: 420px;
+      padding: 18px 20px;
+      border-radius: 20px;
+      color: #f8fafc;
+      background: rgba(15, 23, 42, 0.64);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      box-shadow: 0 18px 44px rgba(2, 6, 23, 0.35);
+      backdrop-filter: blur(12px);
+    }
+    .eyebrow {
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #93c5fd;
+    }
+    .title {
+      margin: 8px 0 4px;
+      font-size: 30px;
+      font-weight: 700;
+    }
+    .meta {
+      font-size: 15px;
+      color: #cbd5e1;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .cell {
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.48);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .label {
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    .value {
+      margin-top: 4px;
+      font-size: 18px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="overlay-root">
+    <div class="panel">
+      <div class="eyebrow">RPi Live Overlay</div>
+      <div class="title">{{ ap_name }}</div>
+      <div class="meta">{{ now_local }}</div>
+      <div class="grid">
+        <div class="cell">
+          <div class="label">Uplink</div>
+          <div class="value">{{ active.name or "none" }}</div>
+        </div>
+        <div class="cell">
+          <div class="label">State</div>
+          <div class="value">{{ active.state }}</div>
+        </div>
+        <div class="cell">
+          <div class="label">wlan0</div>
+          <div class="value">{{ wlan0_ip }}</div>
+        </div>
+        <div class="cell">
+          <div class="label">wlan1</div>
+          <div class="value">{{ wlan1_ip }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
 
 
 class YouTubeLiveError(RuntimeError):
@@ -244,6 +348,89 @@ def _drop_json(path):
         path.unlink()
     except FileNotFoundError:
         pass
+
+
+def _coerce_int(value, default, minimum=None, maximum=None):
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError, AttributeError):
+        number = default
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
+
+
+def _coerce_float(value, default, minimum=None, maximum=None):
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError, AttributeError):
+        number = default
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
+
+
+def default_overlay_state():
+    return {
+        "enabled": False,
+        "x": 36,
+        "y": 36,
+        "width": 420,
+        "height": 240,
+        "opacity": 1.0,
+        "refresh_sec": 10,
+        "html_path": str(OVERLAY_HTML_PATH),
+        "png_path": str(OVERLAY_PNG_PATH),
+        "renderer": "chromium",
+    }
+
+
+def normalize_overlay_state(state):
+    payload = default_overlay_state()
+    if isinstance(state, dict):
+        payload.update(state)
+    payload["enabled"] = bool(payload.get("enabled"))
+    payload["x"] = _coerce_int(payload.get("x"), 36, minimum=0, maximum=3840)
+    payload["y"] = _coerce_int(payload.get("y"), 36, minimum=0, maximum=2160)
+    payload["width"] = _coerce_int(payload.get("width"), 420, minimum=32, maximum=3840)
+    payload["height"] = _coerce_int(payload.get("height"), 240, minimum=32, maximum=2160)
+    payload["opacity"] = _coerce_float(payload.get("opacity"), 1.0, minimum=0.0, maximum=1.0)
+    payload["refresh_sec"] = _coerce_int(payload.get("refresh_sec"), 10, minimum=5, maximum=3600)
+    payload["html_path"] = str(payload.get("html_path") or OVERLAY_HTML_PATH)
+    payload["png_path"] = str(payload.get("png_path") or OVERLAY_PNG_PATH)
+    payload["renderer"] = str(payload.get("renderer") or "chromium")
+    return payload
+
+
+def load_overlay_state():
+    state = normalize_overlay_state(_load_json(OVERLAY_STATE_PATH, {}))
+    png_path = Path(state["png_path"])
+    html_path = Path(state["html_path"])
+    state["png_exists"] = png_path.is_file()
+    state["html_exists"] = html_path.is_file()
+    if state["png_exists"]:
+        try:
+            state["png_mtime"] = png_path.stat().st_mtime
+        except OSError:
+            state["png_mtime"] = 0
+    else:
+        state["png_mtime"] = 0
+    return state
+
+
+def save_overlay_state(state):
+    _save_json(OVERLAY_STATE_PATH, normalize_overlay_state(state))
+
+
+def ensure_overlay_html_exists():
+    if OVERLAY_HTML_PATH.exists():
+        return
+    OVERLAY_HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OVERLAY_HTML_PATH.write_text(DEFAULT_OVERLAY_HTML, encoding="utf-8")
 
 
 def _http_json(url, *, method="GET", headers=None, data=None):
@@ -867,11 +1054,13 @@ def _relay_audio_filter():
     )
 
 
-def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode):
+def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode, overlay=None, overlay_fd=None):
     rotation = normalize_rotation_mode(rotation)
     rotation_spec = rotation_mode_spec(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
     fps_spec = fps_mode_spec(fps_mode)
+    overlay = normalize_overlay_state(overlay or {})
+    overlay_active = bool(overlay.get("enabled") and overlay_fd is not None and overlay.get("png_path"))
     argv = [
         FFMPEG_BIN,
         "-hide_banner",
@@ -882,10 +1071,6 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode)
         "1",
         "-i",
         listen_url,
-        "-map",
-        "0:v?",
-        "-map",
-        "0:a?",
         "-c:a",
         "aac",
         "-b:a",
@@ -897,12 +1082,47 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode)
         "-af",
         _relay_audio_filter(),
     ]
+    if overlay_active:
+        argv.extend(
+            [
+                "-thread_queue_size",
+                "8",
+                "-f",
+                "image2pipe",
+                "-framerate",
+                "1",
+                "-c:v",
+                "png",
+                "-i",
+                f"pipe:{overlay_fd}",
+            ]
+        )
     video_filters = []
     if rotation_spec.get("transpose"):
         video_filters.append(f"transpose={rotation_spec['transpose']}")
     if fps_spec.get("fps"):
         video_filters.append(f"fps={fps_spec['fps']}")
-    if video_filters:
+    if overlay_active:
+        overlay_filters = ["format=rgba"]
+        overlay_width = overlay.get("width") or -1
+        overlay_height = overlay.get("height") or -1
+        overlay_filters.append(f"scale=w={overlay_width}:h={overlay_height}")
+        if overlay.get("opacity", 1.0) < 0.999:
+            overlay_filters.append(f"colorchannelmixer=aa={overlay['opacity']:.3f}")
+        base_chain = ",".join(video_filters) if video_filters else "null"
+        argv.extend(
+            [
+                "-filter_complex",
+                f"[0:v]{base_chain}[base];[1:v]{','.join(overlay_filters)}[ov];[base][ov]overlay=x={overlay['x']}:y={overlay['y']}[vout]",
+                "-map",
+                "[vout]",
+                "-map",
+                "0:a?",
+            ]
+        )
+    else:
+        argv.extend(["-map", "0:v?", "-map", "0:a?"])
+    if video_filters or overlay_active:
         video_encoder = _resolve_proxy_video_encoder()
         argv.extend(
             [
@@ -945,10 +1165,11 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode)
     return argv
 
 
-def _proxy_video_pipeline_state(rotation, fps_mode):
+def _proxy_video_pipeline_state(rotation, fps_mode, overlay=None):
     rotation = normalize_rotation_mode(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
-    if rotation == "0" and fps_mode == "original":
+    overlay = normalize_overlay_state(overlay or load_overlay_state())
+    if rotation == "0" and fps_mode == "original" and not overlay.get("enabled"):
         return {
             "mode": "copy-video-live-audio",
             "video_encoder": "copy",
@@ -1112,6 +1333,7 @@ def _build_publish_info(stream_name, ingestion_info, ap_ip):
 def _stop_proxy_relay():
     relay = load_relay_state()
     pid = relay.get("pid")
+    overlay_feed_pid = relay.get("overlay_feed_pid")
     if not pid or not relay.get("running"):
         clear_relay_state()
         return
@@ -1119,6 +1341,11 @@ def _stop_proxy_relay():
         os.kill(int(pid), signal.SIGTERM)
     except OSError:
         pass
+    if overlay_feed_pid:
+        try:
+            os.kill(int(overlay_feed_pid), signal.SIGTERM)
+        except OSError:
+            pass
     save_relay_state(
         {
             **relay,
@@ -1129,7 +1356,27 @@ def _stop_proxy_relay():
     )
 
 
-def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None, rotation=None, fps_mode=None):
+def _start_overlay_feed(png_path):
+    argv = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "overlay-feed",
+        "--png",
+        png_path,
+        "--interval",
+        str(OVERLAY_FRAME_INTERVAL_SEC),
+    ]
+    return subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
+
+
+def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None, rotation=None, fps_mode=None, overlay=None):
     if not target_url:
         raise YouTubeLiveError("Missing YouTube RTMP target for proxy relay")
     _stop_proxy_relay()
@@ -1138,13 +1385,23 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None,
     audio_mode = normalize_audio_mode(audio_mode)
     rotation = normalize_rotation_mode(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
-    video_pipeline = _proxy_video_pipeline_state(rotation, fps_mode)
+    overlay = normalize_overlay_state(overlay or load_overlay_state())
+    overlay_active = bool(overlay.get("enabled") and overlay.get("png_path"))
+    overlay_feed = None
+    overlay_fd = None
+    if overlay_active:
+        overlay_feed = _start_overlay_feed(overlay["png_path"])
+        if overlay_feed.stdout is not None:
+            overlay_fd = overlay_feed.stdout.fileno()
+    video_pipeline = _proxy_video_pipeline_state(rotation, fps_mode, overlay)
     argv = _proxy_relay_argv(
         listen_url=listen_url,
         target_url=target_url,
         audio_mode=audio_mode,
         rotation=rotation,
         fps_mode=fps_mode,
+        overlay=overlay,
+        overlay_fd=overlay_fd,
     )
     try:
         proc = subprocess.Popen(
@@ -1154,13 +1411,20 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None,
             stderr=subprocess.STDOUT,
             close_fds=True,
             start_new_session=True,
+            pass_fds=(() if overlay_fd is None else (overlay_fd,)),
         )
     except FileNotFoundError as exc:
         log_handle.close()
+        if overlay_feed:
+            overlay_feed.kill()
         raise YouTubeLiveError(f"{FFMPEG_BIN} is not installed; proxy relay cannot start") from exc
     except Exception:
         log_handle.close()
+        if overlay_feed:
+            overlay_feed.kill()
         raise
+    if overlay_feed and overlay_feed.stdout is not None:
+        overlay_feed.stdout.close()
     relay = _decorate_stream_state(
         {
             "status": "running",
@@ -1180,6 +1444,9 @@ def _start_proxy_relay(*, listen_url, target_url, stream_title, audio_mode=None,
             "audio_mode": audio_mode,
             "rotation": rotation,
             "fps_mode": fps_mode,
+            "overlay": overlay,
+            "overlay_enabled": overlay_active,
+            "overlay_feed_pid": overlay_feed.pid if overlay_feed else 0,
         },
         default_audio_mode=audio_mode,
         default_rotation=rotation,
@@ -1299,6 +1566,30 @@ def set_proxy_fps_mode(mode):
     return load_stream_state()
 
 
+def refresh_proxy_overlay():
+    state = load_stream_state()
+    if not state:
+        raise YouTubeLiveError("No YouTube stream has been created yet")
+    if state.get("mode") != "proxy":
+        raise YouTubeLiveError("Overlay refresh is only available when proxy relay mode is enabled")
+    listen_url = state.get("proxy_listen_url", "")
+    target_url = state.get("target_url", "")
+    if not listen_url or not target_url:
+        raise YouTubeLiveError("Proxy relay settings are incomplete")
+    relay = state.get("relay") or {}
+    state["relay"] = _start_proxy_relay(
+        listen_url=listen_url,
+        target_url=target_url,
+        stream_title=state.get("title", ""),
+        audio_mode=(relay.get("audio_mode") or state.get("audio_mode")),
+        rotation=(relay.get("rotation") or state.get("rotation")),
+        fps_mode=(relay.get("fps_mode") or state.get("fps_mode")),
+        overlay=load_overlay_state(),
+    )
+    save_stream_state(state)
+    return load_stream_state()
+
+
 def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
     title = (title or "").strip() or _default_stream_title()
     audio_mode = normalize_audio_mode(audio_mode)
@@ -1390,6 +1681,7 @@ def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None,
             audio_mode=state.get("audio_mode"),
             rotation=state.get("rotation"),
             fps_mode=state.get("fps_mode"),
+            overlay=load_overlay_state(),
         )
     save_stream_state(state)
     LOGGER.info(
@@ -1578,8 +1870,47 @@ def _parse_cli_args(argv):
     )
 
 
+def _parse_overlay_feed_args(argv):
+    png_path = str(OVERLAY_PNG_PATH)
+    interval = OVERLAY_FRAME_INTERVAL_SEC
+    idx = 0
+    while idx < len(argv):
+        item = argv[idx]
+        if item == "--png" and idx + 1 < len(argv):
+            png_path = argv[idx + 1]
+            idx += 2
+            continue
+        if item == "--interval" and idx + 1 < len(argv):
+            interval = _coerce_float(argv[idx + 1], OVERLAY_FRAME_INTERVAL_SEC, minimum=0.2, maximum=10.0)
+            idx += 2
+            continue
+        idx += 1
+    return png_path, interval
+
+
+def _run_overlay_feed(png_path, interval):
+    last_payload = b""
+    while True:
+        try:
+            payload = Path(png_path).read_bytes()
+            if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+                last_payload = payload
+        except OSError:
+            payload = b""
+        if last_payload:
+            try:
+                sys.stdout.buffer.write(last_payload)
+                sys.stdout.buffer.flush()
+            except BrokenPipeError:
+                break
+        time.sleep(interval)
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "create":
         logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s", force=True)
         cli_ap_ip, cli_title, cli_audio_mode, cli_rotation, cli_fps_mode = _parse_cli_args(sys.argv[2:])
         _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode, cli_audio_mode)
+    elif len(sys.argv) >= 2 and sys.argv[1] == "overlay-feed":
+        cli_png_path, cli_interval = _parse_overlay_feed_args(sys.argv[2:])
+        _run_overlay_feed(cli_png_path, cli_interval)
