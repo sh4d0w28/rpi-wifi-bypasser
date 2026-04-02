@@ -145,7 +145,14 @@ YouTube config:
     - `YOUTUBE_OVERLAY_RENDER_HTML_PATH`
     - `YOUTUBE_OVERLAY_BROWSER_BIN`
     - `YOUTUBE_OVERLAY_FRAME_INTERVAL_SEC`
+    - `OVERLAY_WEATHER_CITY` (default: `Bangkok`)
+    - `OVERLAY_WEATHER_COUNTRY` (default: `Thailand`)
+    - `OVERLAY_WEATHER_LAT`
+    - `OVERLAY_WEATHER_LON`
+    - `OVERLAY_WEATHER_REFRESH_SEC` (default: `600`)
+    - `OVERLAY_WEATHER_CACHE_PATH`
   - the overlay renderer currently expects a Chromium-compatible browser on the Pi such as `chromium-browser` or `chromium`
+  - the Weather overlay demo now renders a 1920x1080 lower-third style card and refreshes live weather data through Open-Meteo on a 10-minute cache by default
 
 Screen map:
 

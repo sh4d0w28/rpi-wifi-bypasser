@@ -1,0 +1,62 @@
+"""Structured entrypoints over the legacy YouTube live implementation."""
+
+from .auth import get_auth_status, poll_device_authorization, start_device_authorization
+from .common import (
+    DEFAULT_OVERLAY_HTML,
+    OVERLAY_FRAME_INTERVAL_SEC,
+    OVERLAY_PNG_PATH,
+    YouTubeLiveError,
+    ensure_overlay_html_exists,
+    list_audio_modes,
+    list_fps_modes,
+    list_rotation_modes,
+    normalize_audio_mode,
+    normalize_fps_mode,
+    normalize_rotation_mode,
+    qr_data_uri,
+)
+from .creation import _run_creation_job, load_creation_log, load_creation_state, start_stream_creation
+from .relay import (
+    _coerce_float,
+    _run_overlay_feed,
+    ensure_proxy_relay_running,
+    load_overlay_state,
+    load_stream_state,
+    refresh_proxy_overlay,
+    save_overlay_state,
+    set_proxy_audio_mode,
+    set_proxy_fps_mode,
+    set_proxy_rotation_mode,
+)
+
+__all__ = [
+    "DEFAULT_OVERLAY_HTML",
+    "OVERLAY_FRAME_INTERVAL_SEC",
+    "OVERLAY_PNG_PATH",
+    "YouTubeLiveError",
+    "_coerce_float",
+    "_run_creation_job",
+    "_run_overlay_feed",
+    "ensure_overlay_html_exists",
+    "ensure_proxy_relay_running",
+    "get_auth_status",
+    "list_audio_modes",
+    "list_fps_modes",
+    "list_rotation_modes",
+    "load_creation_log",
+    "load_creation_state",
+    "load_overlay_state",
+    "load_stream_state",
+    "normalize_audio_mode",
+    "normalize_fps_mode",
+    "normalize_rotation_mode",
+    "poll_device_authorization",
+    "qr_data_uri",
+    "refresh_proxy_overlay",
+    "save_overlay_state",
+    "set_proxy_audio_mode",
+    "set_proxy_fps_mode",
+    "set_proxy_rotation_mode",
+    "start_device_authorization",
+    "start_stream_creation",
+]

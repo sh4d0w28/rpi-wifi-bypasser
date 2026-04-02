@@ -481,24 +481,120 @@ def overlay_weather_template():
 <head>
   <meta charset="utf-8">
   <style>
-    html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; font-family: Arial, sans-serif; }
-    .panel { margin: 18px; padding: 18px 20px; width: 320px; border-radius: 24px; color: #eff6ff; background: linear-gradient(135deg, rgba(14,116,144,0.82), rgba(30,41,59,0.82)); border: 1px solid rgba(255,255,255,0.28); box-shadow: 0 14px 34px rgba(0,0,0,0.32); }
-    .top { display: flex; justify-content: space-between; align-items: baseline; }
-    .city { font-size: 20px; font-weight: 700; }
-    .temp { font-size: 42px; font-weight: 700; margin-top: 8px; }
-    .meta { margin-top: 10px; font-size: 16px; color: #dbeafe; }
-    .chip { margin-top: 14px; display: inline-block; padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.14); font-size: 15px; }
+    :root { color-scheme: dark; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+      font-family: "Arial", sans-serif;
+    }
+    .stage {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(125, 211, 252, 0.18), transparent 24%),
+        radial-gradient(circle at 84% 12%, rgba(251, 191, 36, 0.12), transparent 18%),
+        linear-gradient(180deg, rgba(2, 6, 23, 0.0) 0%, rgba(2, 6, 23, 0.10) 58%, rgba(2, 6, 23, 0.18) 100%);
+    }
+    .panel {
+      position: absolute;
+      left: 72px;
+      right: 72px;
+      bottom: 60px;
+      min-height: 252px;
+      padding: 34px 42px;
+      border-radius: 34px;
+      color: #eff6ff;
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.76), rgba(8, 47, 73, 0.78));
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+      backdrop-filter: blur(10px);
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 36px;
+    }
+    .eyebrow {
+      font-size: 28px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(186, 230, 253, 0.92);
+    }
+    .city {
+      margin-top: 10px;
+      font-size: 72px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .summary {
+      font-size: 48px;
+      font-weight: 600;
+      color: #dbeafe;
+      text-align: right;
+    }
+    .temp {
+      margin-top: 26px;
+      font-size: 164px;
+      font-weight: 700;
+      line-height: 0.9;
+    }
+    .meta {
+      margin-top: 18px;
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 12px 18px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      font-size: 26px;
+      color: #e0f2fe;
+    }
+    .footer {
+      margin-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 24px;
+      font-size: 24px;
+      color: rgba(224, 242, 254, 0.82);
+    }
+    .mono {
+      font-family: "Consolas", "Courier New", monospace;
+    }
   </style>
 </head>
 <body>
-  <div class="panel">
-    <div class="top">
-      <div class="city">Bangkok Demo</div>
-      <div>WEATHER</div>
+  <div class="stage">
+    <div class="panel">
+      <div class="top">
+        <div>
+          <div class="eyebrow">Live Weather</div>
+          <div class="city">{{ weather.city }}{% if weather.country %}, {{ weather.country }}{% endif %}</div>
+        </div>
+        <div class="summary">{{ weather.summary }}</div>
+      </div>
+      <div class="temp">{{ weather.temperature_text }}</div>
+      <div class="meta">
+        <div class="chip">{{ weather.apparent_text }}</div>
+        <div class="chip">{{ weather.wind_text }}</div>
+        <div class="chip">AP {{ ap_name }}</div>
+        <div class="chip">UPLINK {{ active.name or '-' }}</div>
+      </div>
+      <div class="footer">
+        <div>Updated <span class="mono">{{ weather.updated_text }}</span></div>
+        <div class="mono">{{ wlan0_ip }} | {{ wlan1_ip }}</div>
+      </div>
     </div>
-    <div class="temp">31C</div>
-    <div class="meta">Partly cloudy</div>
-    <div class="chip">Example overlay template</div>
   </div>
 </body>
 </html>
@@ -1236,12 +1332,19 @@ def main():
     def apply_overlay_demo(template_name):
         overlay = load_overlay_state()
         overlay["enabled"] = template_name != "off"
-        overlay["x"] = 36
-        overlay["y"] = 36
-        overlay["width"] = 420
-        overlay["height"] = 240
         overlay["opacity"] = 1.0
-        overlay["refresh_sec"] = 5
+        if template_name == "weather":
+            overlay["x"] = 0
+            overlay["y"] = 0
+            overlay["width"] = 1920
+            overlay["height"] = 1080
+            overlay["refresh_sec"] = 600
+        else:
+            overlay["x"] = 36
+            overlay["y"] = 36
+            overlay["width"] = 420
+            overlay["height"] = 240
+            overlay["refresh_sec"] = 10
         save_overlay_state(overlay)
         ensure_overlay_html_exists()
         html_path = Path(overlay.get("html_path") or "")
