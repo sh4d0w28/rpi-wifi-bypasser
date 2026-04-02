@@ -77,6 +77,38 @@ from .modes import (
     normalize_rotation_mode,
     rotation_mode_spec,
 )
+from .storage import (
+    clear_creation_state as storage_clear_creation_state,
+    clear_device_state as storage_clear_device_state,
+    clear_relay_state as storage_clear_relay_state,
+    coerce_float,
+    coerce_int,
+    default_overlay_state as storage_default_overlay_state,
+    drop_json,
+    ensure_overlay_html_exists as storage_ensure_overlay_html_exists,
+    load_client_config as storage_load_client_config,
+    load_creation_log as storage_load_creation_log,
+    load_creation_state as storage_load_creation_state,
+    load_device_state as storage_load_device_state,
+    load_json,
+    load_overlay_state as storage_load_overlay_state,
+    load_relay_state as storage_load_relay_state,
+    load_stream_state as storage_load_stream_state,
+    load_token as storage_load_token,
+    normalize_client_config,
+    normalize_creation_state as storage_normalize_creation_state,
+    normalize_overlay_state as storage_normalize_overlay_state,
+    normalize_relay_state as storage_normalize_relay_state,
+    reset_creation_log as storage_reset_creation_log,
+    save_creation_state as storage_save_creation_state,
+    save_device_state as storage_save_device_state,
+    save_json,
+    save_overlay_state as storage_save_overlay_state,
+    save_relay_state as storage_save_relay_state,
+    save_stream_state as storage_save_stream_state,
+    save_token as storage_save_token,
+    update_creation_state as storage_update_creation_state,
+)
 
 try:
     import fcntl
@@ -125,114 +157,43 @@ def _decorate_stream_state(state, *, default_audio_mode=None, default_rotation=N
 
 
 def _load_json(path, default):
-    if not path.exists():
-        return default
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
-    return data if isinstance(data, type(default)) else default
+    return load_json(path, default)
 
 
 def _save_json(path, payload):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    temp_path.replace(path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    save_json(path, payload)
 
 
 def _drop_json(path):
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
+    drop_json(path)
 
 
 def _coerce_int(value, default, minimum=None, maximum=None):
-    try:
-        number = int(str(value).strip())
-    except (TypeError, ValueError, AttributeError):
-        number = default
-    if minimum is not None:
-        number = max(minimum, number)
-    if maximum is not None:
-        number = min(maximum, number)
-    return number
+    return coerce_int(value, default, minimum=minimum, maximum=maximum)
 
 
 def _coerce_float(value, default, minimum=None, maximum=None):
-    try:
-        number = float(str(value).strip())
-    except (TypeError, ValueError, AttributeError):
-        number = default
-    if minimum is not None:
-        number = max(minimum, number)
-    if maximum is not None:
-        number = min(maximum, number)
-    return number
+    return coerce_float(value, default, minimum=minimum, maximum=maximum)
 
 
 def default_overlay_state():
-    return {
-        "enabled": False,
-        "x": 36,
-        "y": 36,
-        "width": 420,
-        "height": 240,
-        "opacity": 1.0,
-        "refresh_sec": 10,
-        "html_path": str(OVERLAY_HTML_PATH),
-        "png_path": str(OVERLAY_PNG_PATH),
-        "renderer": "chromium",
-    }
+    return storage_default_overlay_state()
 
 
 def normalize_overlay_state(state):
-    payload = default_overlay_state()
-    if isinstance(state, dict):
-        payload.update(state)
-    payload["enabled"] = bool(payload.get("enabled"))
-    payload["x"] = _coerce_int(payload.get("x"), 36, minimum=0, maximum=3840)
-    payload["y"] = _coerce_int(payload.get("y"), 36, minimum=0, maximum=2160)
-    payload["width"] = _coerce_int(payload.get("width"), 420, minimum=32, maximum=3840)
-    payload["height"] = _coerce_int(payload.get("height"), 240, minimum=32, maximum=2160)
-    payload["opacity"] = _coerce_float(payload.get("opacity"), 1.0, minimum=0.0, maximum=1.0)
-    payload["refresh_sec"] = _coerce_int(payload.get("refresh_sec"), 10, minimum=5, maximum=3600)
-    payload["html_path"] = str(payload.get("html_path") or OVERLAY_HTML_PATH)
-    payload["png_path"] = str(payload.get("png_path") or OVERLAY_PNG_PATH)
-    payload["renderer"] = str(payload.get("renderer") or "chromium")
-    return payload
+    return storage_normalize_overlay_state(state)
 
 
 def load_overlay_state():
-    state = normalize_overlay_state(_load_json(OVERLAY_STATE_PATH, {}))
-    png_path = Path(state["png_path"])
-    html_path = Path(state["html_path"])
-    state["png_exists"] = png_path.is_file()
-    state["html_exists"] = html_path.is_file()
-    if state["png_exists"]:
-        try:
-            state["png_mtime"] = png_path.stat().st_mtime
-        except OSError:
-            state["png_mtime"] = 0
-    else:
-        state["png_mtime"] = 0
-    return state
+    return storage_load_overlay_state()
 
 
 def save_overlay_state(state):
-    _save_json(OVERLAY_STATE_PATH, normalize_overlay_state(state))
+    storage_save_overlay_state(state)
 
 
 def ensure_overlay_html_exists():
-    if OVERLAY_HTML_PATH.exists():
-        return
-    OVERLAY_HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OVERLAY_HTML_PATH.write_text(DEFAULT_OVERLAY_HTML, encoding="utf-8")
+    storage_ensure_overlay_html_exists()
 
 
 def _http_json(url, *, method="GET", headers=None, data=None):
@@ -281,148 +242,84 @@ def _http_form(url, fields):
 
 
 def _normalize_client_config(data):
-    if not isinstance(data, dict):
-        return {}
-    for key in ("web", "installed", "tv", "device"):
-        if isinstance(data.get(key), dict):
-            data = data[key]
-            break
-    client_id = str(data.get("client_id", "")).strip()
-    client_secret = str(data.get("client_secret", "")).strip()
-    return {"client_id": client_id, "client_secret": client_secret}
+    return normalize_client_config(data)
 
 
 def load_client_config():
-    config = _normalize_client_config(_load_json(CLIENT_CONFIG_PATH, {}))
-    if config.get("client_id"):
-        return config
-    env_client_id = os.environ.get("YOUTUBE_CLIENT_ID", "").strip()
-    env_client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET", "").strip()
-    if env_client_id:
-        return {"client_id": env_client_id, "client_secret": env_client_secret}
-    return {}
+    return storage_load_client_config()
 
 
 def load_token():
-    return _load_json(TOKEN_PATH, {})
+    return storage_load_token()
 
 
 def save_token(token):
-    _save_json(TOKEN_PATH, token)
+    storage_save_token(token)
 
 
 def load_device_state():
-    return _load_json(DEVICE_STATE_PATH, {})
+    return storage_load_device_state()
 
 
 def save_device_state(state):
-    _save_json(DEVICE_STATE_PATH, state)
+    storage_save_device_state(state)
 
 
 def clear_device_state():
-    _drop_json(DEVICE_STATE_PATH)
+    storage_clear_device_state()
 
 
 def load_stream_state():
-    state = _decorate_stream_state(
-        _load_json(STREAM_STATE_PATH, {}),
-        default_audio_mode="normal",
-        default_rotation="0",
-        default_fps_mode="original",
-    )
-    if state.get("mode") == "proxy":
-        state["audio_mode"] = normalize_audio_mode(state.get("audio_mode") or DEFAULT_PROXY_AUDIO_MODE)
-        state["rotation"] = normalize_rotation_mode(state.get("rotation"))
-        state["fps_mode"] = normalize_fps_mode(state.get("fps_mode"))
-        relay = load_relay_state()
-        if relay:
-            state["relay"] = relay
-            state = _decorate_stream_state(
-                state,
-                default_audio_mode=relay.get("audio_mode"),
-                default_rotation=relay.get("rotation"),
-                default_fps_mode=relay.get("fps_mode"),
-            )
-    return state
+    return storage_load_stream_state(load_relay_state_fn=load_relay_state)
 
 
 def save_stream_state(state):
-    _save_json(
-        STREAM_STATE_PATH,
-        _decorate_stream_state(state, default_audio_mode="normal", default_rotation="0", default_fps_mode="original"),
-    )
+    storage_save_stream_state(state)
 
 
 def load_relay_state():
-    return normalize_relay_state(_load_json(RELAY_STATE_PATH, {}))
-
-
-def save_relay_state(state):
-    _save_json(
-        RELAY_STATE_PATH,
-        _decorate_stream_state(
-            state,
-            default_audio_mode=DEFAULT_PROXY_AUDIO_MODE,
-            default_rotation="0",
-            default_fps_mode="original",
-        ),
+    return storage_load_relay_state(
+        populate_relay_video_fields=_populate_relay_video_fields,
+        relay_pid_matches=_relay_pid_matches,
     )
 
 
+def save_relay_state(state):
+    storage_save_relay_state(state)
+
+
 def clear_relay_state():
-    _drop_json(RELAY_STATE_PATH)
+    storage_clear_relay_state()
 
 
 def load_creation_state():
-    return normalize_creation_state(_load_json(STREAM_CREATE_STATE_PATH, {}))
+    return storage_load_creation_state(pid_alive=_pid_alive)
 
 
 def save_creation_state(state):
-    _save_json(STREAM_CREATE_STATE_PATH, state)
+    storage_save_creation_state(state)
 
 
 def clear_creation_state():
-    _drop_json(STREAM_CREATE_STATE_PATH)
+    storage_clear_creation_state()
 
 
 def update_creation_state(**fields):
-    state = load_creation_state()
-    state.update(fields)
-    save_creation_state(state)
+    storage_update_creation_state(fields=fields, pid_alive=_pid_alive)
 
 
 def reset_creation_log(*, ap_ip="-", title="", rotation="0", fps_mode="original", audio_mode="normal"):
-    CREATION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    header = [
-        f"[{datetime.now(timezone.utc).isoformat()}] stream creation requested",
-        f"ap_ip={ap_ip or '-'}",
-        f"title={title or '-'}",
-        f"audio_mode={normalize_audio_mode(audio_mode)}",
-        f"rotation={normalize_rotation_mode(rotation)}",
-        f"fps_mode={normalize_fps_mode(fps_mode)}",
-        "",
-    ]
-    CREATION_LOG_PATH.write_text("\n".join(header), encoding="utf-8")
+    storage_reset_creation_log(
+        ap_ip=ap_ip,
+        title=title,
+        rotation=rotation,
+        fps_mode=fps_mode,
+        audio_mode=audio_mode,
+    )
 
 
 def load_creation_log(max_bytes=262144):
-    if not CREATION_LOG_PATH.exists():
-        return {"path": str(CREATION_LOG_PATH), "text": "", "truncated": False}
-    try:
-        raw = CREATION_LOG_PATH.read_bytes()
-    except OSError:
-        return {"path": str(CREATION_LOG_PATH), "text": "", "truncated": False}
-
-    truncated = False
-    if max_bytes is not None and len(raw) > max_bytes:
-        raw = raw[-max_bytes:]
-        truncated = True
-    text = raw.decode("utf-8", errors="replace")
-    if truncated and "\n" in text:
-        text = text.split("\n", 1)[1]
-    if truncated:
-        text = "[earlier log truncated]\n" + text
-    return {"path": str(CREATION_LOG_PATH), "text": text, "truncated": truncated}
+    return storage_load_creation_log(max_bytes=max_bytes)
 
 
 def _pid_alive(pid):
@@ -547,40 +444,15 @@ def _relay_lock():
 
 
 def normalize_creation_state(state):
-    if not isinstance(state, dict):
-        return {}
-    if state.get("status") != "creating":
-        return state
-    pid = state.get("pid")
-    if pid and _pid_alive(pid):
-        return state
-    if pid:
-        state = dict(state)
-        state.setdefault("finished_at", time.time())
-        state["status"] = "error"
-        state["stage"] = "error"
-        state["message"] = state.get("message") or "Stream creation stopped"
-    return state
+    return storage_normalize_creation_state(state, pid_alive=_pid_alive)
 
 
 def normalize_relay_state(state):
-    if not isinstance(state, dict):
-        return {}
-    state = _decorate_stream_state(
+    return storage_normalize_relay_state(
         state,
-        default_audio_mode=DEFAULT_PROXY_AUDIO_MODE,
-        default_rotation="0",
-        default_fps_mode="original",
+        populate_relay_video_fields=_populate_relay_video_fields,
+        relay_pid_matches=_relay_pid_matches,
     )
-    state = _populate_relay_video_fields(state)
-    pid = state.get("pid")
-    if not pid:
-        return state
-    state["running"] = _relay_pid_matches(pid, state.get("listen_url", ""), state.get("target_url", ""))
-    if not state["running"] and state.get("status") == "running":
-        state["status"] = "stopped"
-        state.setdefault("stopped_at", time.time())
-    return state
 
 
 def _relay_orientation(width, height):
