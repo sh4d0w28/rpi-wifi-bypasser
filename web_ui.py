@@ -11,6 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 from flask import Flask, Response, flash, redirect, render_template, render_template_string, request, send_file, url_for
+from rpi_ap_tools.core.files import load_json_file, read_config_value
+from rpi_ap_tools.core.process import run_command
+from rpi_ap_tools.system.network import read_ap_name, read_ipv4
 from youtube_live import (
     DEFAULT_OVERLAY_HTML,
     YouTubeLiveError,
@@ -63,26 +66,6 @@ RELAY_WATCHDOG_THREAD = None
 LOGGER = logging.getLogger(__name__)
 
 
-def run(cmd, check=True):
-    return subprocess.run(cmd, text=True, capture_output=True, check=check)
-
-
-def read_config_value(path, key, default=""):
-    if not path.exists():
-        return default
-    try:
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            current_key, value = stripped.split("=", 1)
-            if current_key.strip() == key:
-                return value.strip().strip("'\"") or default
-    except Exception:
-        return default
-    return default
-
-
 def load_wifi_db():
     if not WIFI_DB_PATH.exists():
         return {}
@@ -129,29 +112,11 @@ def get_saved_wifi(ssid):
 
 
 def get_ap_name():
-    if HOSTAPD_CONF.exists():
-        for line in HOSTAPD_CONF.read_text(encoding="utf-8", errors="ignore").splitlines():
-            if line.strip().startswith("ssid="):
-                return line.split("=", 1)[1].strip()
-    wlan0 = os.environ.get("WLAN0_IFACE", "wlan0")
-    active = run(["nmcli", "-t", "-f", "GENERAL.CONNECTION", "device", "show", wlan0], check=False)
-    connection_name = ""
-    for line in active.stdout.splitlines():
-        if line.startswith("GENERAL.CONNECTION:"):
-            connection_name = line.split(":", 1)[1].strip()
-            break
-    if connection_name:
-        ssid = run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", connection_name], check=False).stdout.strip()
-        if ssid:
-            return ssid
-    configured = read_config_value(AP_CONFIG_FILE, "AP_SSID", "")
-    if configured:
-        return configured
-    return "unknown"
+    return read_ap_name(HOSTAPD_CONF, AP_CONFIG_FILE, os.environ.get("WLAN0_IFACE", "wlan0"))
 
 
 def get_active_connection():
-    result = run(["nmcli", "-t", "-f", "DEVICE,NAME,TYPE,STATE", "connection", "show", "--active"], check=False)
+    result = run_command(["nmcli", "-t", "-f", "DEVICE,NAME,TYPE,STATE", "connection", "show", "--active"], check=False)
     active = {"name": "", "state": "disconnected"}
     for line in result.stdout.splitlines():
         parts = line.split(":")
@@ -178,9 +143,9 @@ def scan_wifi():
 
     wifi_db = load_wifi_db()
     if now - SCAN_CACHE["rescanned_at"] >= WIFI_RESCAN_MIN_INTERVAL_SEC:
-        run(["nmcli", "dev", "wifi", "rescan", "ifname", WLAN_IFACE], check=False)
+        run_command(["nmcli", "dev", "wifi", "rescan", "ifname", WLAN_IFACE], check=False)
         SCAN_CACHE["rescanned_at"] = now
-    result = run(["nmcli", "-t", "-f", "SSID,SECURITY,SIGNAL", "dev", "wifi", "list", "ifname", WLAN_IFACE], check=False)
+    result = run_command(["nmcli", "-t", "-f", "SSID,SECURITY,SIGNAL", "dev", "wifi", "list", "ifname", WLAN_IFACE], check=False)
     seen = {}
     for line in result.stdout.splitlines():
         parts = re.split(r'(?<!\\):', line)
@@ -210,7 +175,7 @@ def scan_wifi():
 
 
 def list_connections():
-    result = run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], check=False)
+    result = run_command(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], check=False)
     items = []
     for line in result.stdout.splitlines():
         parts = line.split(":")
@@ -221,14 +186,14 @@ def list_connections():
 
 def delete_connection_if_exists(name):
     if name in list_connections():
-        run(["nmcli", "connection", "delete", name], check=False)
+        run_command(["nmcli", "connection", "delete", name], check=False)
 
 
 def connect_wifi(ssid, password, auth_type):
     profile_name = f"uplink-{ssid}"
     delete_connection_if_exists(profile_name)
 
-    proc = run(["nmcli", "connection", "add", "type", "wifi", "ifname", WLAN_IFACE, "con-name", profile_name, "ssid", ssid], check=False)
+    proc = run_command(["nmcli", "connection", "add", "type", "wifi", "ifname", WLAN_IFACE, "con-name", profile_name, "ssid", ssid], check=False)
     if proc.returncode != 0:
         return False, proc.stderr.strip() or proc.stdout.strip() or "Failed to add connection"
 
@@ -254,11 +219,11 @@ def connect_wifi(ssid, password, auth_type):
         return False, f"Unsupported auth type: {auth_type}"
 
     for cmd in cmds:
-        proc = run(cmd, check=False)
+        proc = run_command(cmd, check=False)
         if proc.returncode != 0:
             return False, proc.stderr.strip() or proc.stdout.strip() or "Failed to modify connection"
 
-    proc = run(["nmcli", "connection", "up", profile_name], check=False)
+    proc = run_command(["nmcli", "connection", "up", profile_name], check=False)
     if proc.returncode != 0:
         return False, proc.stderr.strip() or proc.stdout.strip() or "Failed to bring up connection"
 
@@ -266,20 +231,11 @@ def connect_wifi(ssid, password, auth_type):
 
 
 def get_ip(device):
-    proc = run(["ip", "-4", "-o", "addr", "show", "dev", device], check=False)
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return "-"
-    m = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+/\d+)', proc.stdout)
-    return m.group(1) if m else "-"
+    return read_ipv4(device)
 
 
 def load_runtime_status():
-    if not STATUS_PATH.exists():
-        return {}
-    try:
-        data = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    data = load_json_file(STATUS_PATH, {})
     return data if isinstance(data, dict) else {}
 
 
@@ -571,7 +527,7 @@ def run_portal_ack():
 
 
 def systemd_show(unit_name, properties):
-    proc = run(["systemctl", "show", unit_name, f"--property={','.join(properties)}"], check=False)
+    proc = run_command(["systemctl", "show", unit_name, f"--property={','.join(properties)}"], check=False)
     if proc.returncode != 0:
         return {}
 
@@ -667,7 +623,7 @@ def start_update_service():
     if status["running"]:
         return False, "Update already running"
 
-    proc = run(["systemctl", "start", "--no-block", UPDATE_SERVICE_NAME], check=False)
+    proc = run_command(["systemctl", "start", "--no-block", UPDATE_SERVICE_NAME], check=False)
     if proc.returncode != 0:
         return False, proc.stderr.strip() or proc.stdout.strip() or f"Failed to start {UPDATE_SERVICE_NAME}"
     return True, "Update started. The web UI may restart while install runs."
@@ -740,7 +696,7 @@ def connect():
 def disconnect():
     active = get_active_connection()
     if active["name"]:
-        proc = run(["nmcli", "connection", "down", active["name"]], check=False)
+        proc = run_command(["nmcli", "connection", "down", active["name"]], check=False)
         flash(proc.stdout.strip() or proc.stderr.strip() or "Disconnected", "success" if proc.returncode == 0 else "error")
     else:
         flash("No active wlan1 connection", "error")

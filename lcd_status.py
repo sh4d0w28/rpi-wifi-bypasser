@@ -15,6 +15,10 @@ from threading import Event, Lock, Thread
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+from rpi_ap_tools.core.files import atomic_write_json, atomic_write_text, read_config_value
+from rpi_ap_tools.core.process import run_command
+from rpi_ap_tools.system.network import read_ap_name as resolve_ap_name
+from rpi_ap_tools.system.network import read_ipv4 as resolve_ipv4
 try:
     import qrcode
 except Exception:
@@ -118,58 +122,17 @@ def enqueue_button_event(name, is_pressed):
         BUTTON_STATE_CACHE[name] = is_pressed
         BUTTON_EVENT_QUEUE.append((time.time(), name, is_pressed))
 
-def run(cmd):
-    return subprocess.run(cmd, text=True, capture_output=True, check=False)
-
-
-def read_config_value(path, key, default=""):
-    if not path.exists():
-        return default
-    try:
-        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            current_key, value = stripped.split("=", 1)
-            if current_key.strip() == key:
-                return value.strip().strip("'\"") or default
-    except Exception:
-        return default
-    return default
-
 def read_ap_name():
-    if HOSTAPD_CONF.exists():
-        for line in HOSTAPD_CONF.read_text(encoding="utf-8", errors="ignore").splitlines():
-            if line.strip().startswith("ssid="):
-                return line.split("=", 1)[1].strip()
-    active_proc = run(["nmcli", "-t", "-f", "GENERAL.CONNECTION", "device", "show", WLAN_AP])
-    connection_name = ""
-    for line in active_proc.stdout.splitlines():
-        if line.startswith("GENERAL.CONNECTION:"):
-            connection_name = line.split(":", 1)[1].strip()
-            break
-    if connection_name:
-        ssid_proc = run(["nmcli", "-g", "802-11-wireless.ssid", "connection", "show", connection_name])
-        ssid = ssid_proc.stdout.strip()
-        if ssid:
-            return ssid
-    configured = read_config_value(AP_CONFIG_FILE, "AP_SSID", "")
-    if configured:
-        return configured
-    return "unknown"
+    return resolve_ap_name(HOSTAPD_CONF, AP_CONFIG_FILE, WLAN_AP)
 
 def read_ap_password():
     return read_config_value(AP_CONFIG_FILE, "AP_PASSWORD", "-")
 
 def read_ipv4(dev):
-    proc = run(["ip", "-4", "-o", "addr", "show", "dev", dev])
-    if proc.returncode != 0:
-        return "-"
-    m = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+/\d+)', proc.stdout)
-    return m.group(1) if m else "-"
+    return resolve_ipv4(dev)
 
 def read_active_wifi():
-    proc = run(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL", "dev", "wifi", "list", "ifname", WLAN_UP])
+    proc = run_command(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL", "dev", "wifi", "list", "ifname", WLAN_UP])
     for line in proc.stdout.splitlines():
         parts = line.split(":")
         if len(parts) >= 3 and parts[0] == "*":
@@ -234,24 +197,6 @@ def read_sysfs_int(path):
 def read_bytes(dev):
     base = Path(f"/sys/class/net/{dev}/statistics")
     return {"rx": read_sysfs_int(base / "rx_bytes"), "tx": read_sysfs_int(base / "tx_bytes")}
-
-def atomic_write_json(path, payload):
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(path.suffix + ".tmp")
-        temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-        temp_path.replace(path)
-    except Exception:
-        pass
-
-def atomic_write_text(path, content):
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(path.suffix + ".tmp")
-        temp_path.write_text(content, encoding="utf-8")
-        temp_path.replace(path)
-    except Exception:
-        pass
 
 def sanitize_filename_part(value, default="unknown"):
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", (value or "").strip())
@@ -427,7 +372,7 @@ def ffprobe_video_dimensions(url):
 
 
 def relay_input_connected():
-    proc = run(["ss", "-ntp"])
+    proc = run_command(["ss", "-ntp"], check=False)
     if proc.returncode != 0:
         return False
     pattern = f":{YOUTUBE_PROXY_RTMP_PORT}"
@@ -689,7 +634,7 @@ def bind_button_callbacks():
     BUTTON_EVENT_MODE = bound_any
 
 def ping_latency_ms(host):
-    proc = run(["ping", "-4", "-c", "1", "-W", "1", host])
+    proc = run_command(["ping", "-4", "-c", "1", "-W", "1", host], check=False)
     if proc.returncode != 0:
         return None
     match = re.search(r'time[=<]([\d.]+)\s*ms', proc.stdout)
@@ -709,7 +654,7 @@ def tcp_latency_ms(host, port):
         return None
 
 def read_nm_connectivity():
-    proc = run(["nmcli", "-t", "networking", "connectivity"])
+    proc = run_command(["nmcli", "-t", "networking", "connectivity"], check=False)
     if proc.returncode != 0:
         return "unknown"
     value = proc.stdout.strip().splitlines()
