@@ -12,13 +12,14 @@ WLAN0_IFACE=${WLAN0_IFACE:-wlan0}
 WLAN1_IFACE=${WLAN1_IFACE:-wlan1}
 
 sudo mkdir -p "$INSTALL_DIR"
-sudo cp -r web_ui.py lcd_status.py youtube_live.py youtube_live_lib configure_shared_egress.sh configure_ap.sh update_ap.sh templates systemd "$INSTALL_DIR"/
+sudo cp -r web_ui.py lcd_status.py youtube_live.py youtube_live_lib configure_shared_egress.sh configure_ap.sh update_ap.sh captive_portal_playwright.py templates systemd "$INSTALL_DIR"/
 sudo chmod +x "$INSTALL_DIR"/web_ui.py
 sudo chmod +x "$INSTALL_DIR"/lcd_status.py
 sudo chmod +x "$INSTALL_DIR"/youtube_live.py
 sudo chmod +x "$INSTALL_DIR"/configure_shared_egress.sh
 sudo chmod +x "$INSTALL_DIR"/configure_ap.sh
 sudo chmod +x "$INSTALL_DIR"/update_ap.sh
+sudo chmod +x "$INSTALL_DIR"/captive_portal_playwright.py
 sudo cp "$INSTALL_DIR"/update_ap.sh /home/pi/update_ap.sh
 sudo chmod +x /home/pi/update_ap.sh
 sudo apt-get update
@@ -160,6 +161,10 @@ esac
 echo "Next steps:"
 echo "  1. Verify or edit $YOUTUBE_CLIENT_CONFIG_PATH"
 echo "  2. Confirm shared egress config if your hotspot uses a captive portal"
+echo "     Optional browser-based portal ack helper:"
+echo "       python3 -m pip install playwright"
+echo "       python3 -m playwright install chromium"
+echo "       export CAPTIVE_PORTAL_ACK_CMD='python3 $INSTALL_DIR/captive_portal_playwright.py'"
 echo "  3. Restart services"
 echo "  4. Open the web UI and use Start YouTube auth"
 echo "Shared egress reconfigure:"

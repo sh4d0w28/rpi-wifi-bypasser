@@ -91,24 +91,24 @@
       gap: 10px;
       margin-bottom: 16px;
     }
-    .tab-button {
-      width: auto;
+    .tab-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       min-width: 110px;
       padding: 12px 16px;
       border-radius: 999px;
       border: 1px solid var(--field-border);
       background: rgba(15, 23, 42, 0.84);
       color: var(--text);
-      cursor: pointer;
+      text-decoration: none;
     }
-    .tab-button.active {
+    .tab-link.active {
       background: linear-gradient(135deg, #38bdf8, #22c55e);
       color: #052033;
       border-color: transparent;
       font-weight: 700;
     }
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
     .grid-2 {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -288,6 +288,28 @@
       max-height: 420px;
       object-fit: contain;
     }
+    .portal-preview-shot img {
+      width: 100%;
+      max-height: 760px;
+      object-fit: contain;
+      display: block;
+    }
+    .portal-candidate-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .portal-candidate-item {
+      border: 1px solid var(--field-border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(15, 23, 42, 0.72);
+    }
+    .portal-candidate-item.recommended {
+      border-color: var(--field-focus);
+      box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.25);
+      background: rgba(56, 189, 248, 0.12);
+    }
     .checkbox-row {
       display: flex;
       align-items: center;
@@ -338,7 +360,7 @@
     <div class="hero">
       <div>
         <h1>RPi uplink control</h1>
-        <p>Manage `wlan1`, YouTube relay, HTML-to-PNG overlays, and system actions from one page.</p>
+        <p>Manage Wi-Fi, stream setup, and overlay control from dedicated pages.</p>
       </div>
       <div class="hero-badges">
         <div class="hero-badge"><strong>AP</strong> <span class="mono">{{ ap_name }}</span></div>
@@ -358,13 +380,13 @@
     {% endwith %}
 
     <div class="tabs">
-      <button type="button" class="tab-button" data-tab="wifi">Wi-Fi</button>
-      <button type="button" class="tab-button" data-tab="youtube">YouTube</button>
-      <button type="button" class="tab-button" data-tab="overlay">Overlay</button>
-      <button type="button" class="tab-button" data-tab="system">System</button>
+      <a class="tab-link {{ 'active' if current_page == 'wifi' else '' }}" href="{{ url_for('system.wifi_page') }}">Wi-Fi</a>
+      <a class="tab-link {{ 'active' if current_page == 'stream' else '' }}" href="{{ url_for('youtube.stream_page') }}">Stream</a>
+      <a class="tab-link {{ 'active' if current_page == 'overlay' else '' }}" href="{{ url_for('overlay.overlay_page') }}">Overlay</a>
     </div>
 
-    <section id="tab-wifi" class="tab-panel stack">
+    {% if current_page == 'wifi' %}
+    <section class="stack">
       <div class="grid-2">
         <div class="card">
           <h2>Connect `wlan1`</h2>
@@ -472,9 +494,98 @@
           </tbody>
         </table>
       </div>
-    </section>
+      <div class="grid-2">
+        <div class="card">
+          <h2>System status</h2>
+          <p><strong>AP name:</strong> <span class="mono">{{ ap_name }}</span></p>
+          <p><strong>wlan0 IP:</strong> <span class="mono">{{ wlan0_ip }}</span></p>
+          <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
+          {% if runtime.probe and runtime.probe.portal_capture and (runtime.probe.portal_capture.final_url or runtime.probe.portal_capture.requested_url) %}
+          <p><strong>Portal URL:</strong> <span class="mono">{{ runtime.probe.portal_capture.final_url or runtime.probe.portal_capture.requested_url }}</span></p>
+          {% endif %}
+          {% if runtime.probe and runtime.probe.portal_capture and runtime.probe.portal_capture.html_path %}
+          <p><strong>Portal HTML:</strong> <span class="mono">{{ runtime.probe.portal_capture.html_path }}</span></p>
+          {% endif %}
+          {% if portal_preview_available %}
+          <form method="post" action="/portal-preview">
+            <button type="submit" class="secondary-button">Refresh portal preview</button>
+          </form>
+          {% endif %}
+          {% if portal_ack_available %}
+          <form method="post" action="/portal-ack">
+            <button type="submit" class="secondary-button">Run portal action</button>
+          </form>
+          {% endif %}
+        </div>
 
-    <section id="tab-youtube" class="tab-panel stack">
+        <div class="card">
+          <h2>Software update</h2>
+          <p><strong>Script:</strong> <span class="mono">{{ update_status.script_path }}</span></p>
+          <p><strong>Repo:</strong> <span class="mono">{{ update_status.repo_path }}</span></p>
+          <p><strong>Current ref:</strong> <span class="mono">{{ update_status.current_ref or '-' }}</span></p>
+          <p><strong>Update job:</strong> <span class="{{ update_status.status_class }}">{{ update_status.summary }}</span></p>
+          {% if update_status.last_started %}
+          <p><strong>Last start:</strong> <span class="mono">{{ update_status.last_started }}</span></p>
+          {% endif %}
+          <form method="post" action="/update">
+            <label for="git-ref">Git branch or tag</label>
+            <input id="git-ref" name="git_ref" list="update-ref-list" value="{{ update_status.ref_input_value or '' }}" placeholder="main or v1.2.3">
+            <datalist id="update-ref-list">
+              {% for item in update_status.ref_options %}
+              <option value="{{ item }}"></option>
+              {% endfor %}
+            </datalist>
+            <button type="submit" {% if not update_status.can_start %}disabled{% endif %}>{{ "Update running..." if update_status.running else "Run update script" }}</button>
+          </form>
+          <p class="help-text">Enter a branch or tag. Branches switch to the latest `origin/<name>`; tags switch to a detached HEAD at that tag.</p>
+          <p class="help-text">Logs: <span class="mono">journalctl -u {{ update_status.service_name }} -n 50</span></p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Portal browser preview</h2>
+        {% if portal_preview_available %}
+        <p class="help-text">This renders the captive portal through Playwright and shows the actual page after JavaScript runs.</p>
+        {% else %}
+        <p class="help-text">Portal preview is unavailable until <span class="mono">CAPTIVE_PORTAL_PREVIEW_CMD</span> is configured, or <span class="mono">CAPTIVE_PORTAL_ACK_CMD</span> points at <span class="mono">captive_portal_playwright.py</span>.</p>
+        {% endif %}
+        {% if portal_preview.updated_at_text %}
+        <p><strong>Captured:</strong> <span class="mono">{{ portal_preview.updated_at_text }}</span></p>
+        {% endif %}
+        {% if portal_preview.title %}
+        <p><strong>Page title:</strong> <span class="mono">{{ portal_preview.title }}</span></p>
+        {% endif %}
+        {% if portal_preview.url %}
+        <p><strong>Rendered URL:</strong> <span class="mono">{{ portal_preview.url }}</span></p>
+        {% endif %}
+        {% if portal_preview.reason %}
+        <p><strong>Analysis:</strong> <span class="mono">{{ portal_preview.reason }}</span></p>
+        {% endif %}
+        {% if portal_preview.recommended and portal_preview.recommended.text %}
+        <p><strong>Suggested button:</strong> <span class="mono">{{ portal_preview.recommended.text }}</span></p>
+        {% endif %}
+        {% if portal_preview.image_exists %}
+        <div class="overlay-preview portal-preview-shot">
+          <img src="{{ url_for('system.portal_preview_image') }}?ts={{ portal_preview.image_ts }}" alt="Captive portal browser preview">
+        </div>
+        {% else %}
+        <p class="help-text">No preview screenshot captured yet. Use <strong>Refresh portal preview</strong> after the Pi hits the captive portal.</p>
+        {% endif %}
+        {% if portal_preview.top_candidates %}
+        <div class="portal-candidate-list">
+          {% for item in portal_preview.top_candidates %}
+          <div class="portal-candidate-item {{ 'recommended' if item.recommended else '' }}">
+            <strong>{{ item.text }}</strong>
+            <span class="mono">score={{ item.score }}</span>
+            {% if item.disabled %}<span class="mono"> disabled</span>{% endif %}
+            <div class="help-text">{{ item.tag }}{% if item.type %} / {{ item.type }}{% endif %}{% if item.css_path %} · {{ item.css_path }}{% endif %}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </section>
+    {% elif current_page == 'stream' %}
+    <section class="stack">
       <div class="card">
         <h2>YouTube Live</h2>
         {% if not youtube_auth.client_configured %}
@@ -556,7 +667,7 @@
             </select>
             <button type="submit" {% if not youtube_ready or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
           </form>
-          <p class="help-text">If overlay is enabled, the relay will transcode video so the HTML-rendered PNG can be composited.</p>
+          <p class="help-text">Proxy mode keeps the overlay stage alive. Turning overlay visibility off now swaps in a transparent frame instead of restarting the stream.</p>
         </div>
 
         <div class="card">
@@ -579,7 +690,7 @@
           <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
           <p><strong>Video encoder:</strong> <span class="mono">{{ youtube_stream.relay.video_encoder_label or youtube_stream.relay.video_encoder or 'copy' }}</span></p>
           <p><strong>Video:</strong> <span class="mono">{% if youtube_stream.relay.video_width and youtube_stream.relay.video_height %}{{ youtube_stream.relay.video_width }}x{{ youtube_stream.relay.video_height }} ({{ youtube_stream.relay.video_orientation or 'unknown' }}){% else %}waiting for incoming stream{% endif %}</span></p>
-          <p><strong>Overlay:</strong> <span class="mono">{{ 'enabled' if youtube_stream.relay.overlay_enabled else 'disabled' }}</span></p>
+          <p><strong>Overlay:</strong> <span class="mono">{{ 'visible' if youtube_stream.relay.overlay_enabled else 'hidden' }}</span></p>
           <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
           {% endif %}
           <form method="post" action="/youtube/audio-mode">
@@ -610,15 +721,15 @@
         </div>
       </div>
     </section>
-
-    <section id="tab-overlay" class="tab-panel stack">
+    {% elif current_page == 'overlay' %}
+    <section class="stack">
       <div class="grid-2">
         <div class="card">
           <h2>Overlay config</h2>
           <form method="post" action="/overlay/save">
             <div class="checkbox-row">
               <input id="overlay-enabled" name="enabled" type="checkbox" {% if overlay.enabled %}checked{% endif %}>
-              <label for="overlay-enabled">Enable overlay in proxy relay</label>
+              <label for="overlay-enabled">Show overlay in stream</label>
             </div>
             <div class="grid-2">
               <div>
@@ -654,6 +765,7 @@
             </div>
           </form>
           <p class="help-text">Template is rendered server-side, then Chromium snapshots it to a transparent PNG.</p>
+          <p class="help-text">Visibility changes apply live. Position, size, and opacity changes still reload the relay because they alter the ffmpeg filter graph.</p>
           <p class="help-text">Useful variables: <span class="mono">ap_name</span>, <span class="mono">active.name</span>, <span class="mono">active.state</span>, <span class="mono">wlan0_ip</span>, <span class="mono">wlan1_ip</span>, <span class="mono">now_local</span>, <span class="mono">runtime</span>.</p>
         </div>
 
@@ -673,38 +785,7 @@
         </div>
       </div>
     </section>
-
-    <section id="tab-system" class="tab-panel stack">
-      <div class="grid-2">
-        <div class="card">
-          <h2>System status</h2>
-          <p><strong>AP name:</strong> <span class="mono">{{ ap_name }}</span></p>
-          <p><strong>wlan0 IP:</strong> <span class="mono">{{ wlan0_ip }}</span></p>
-          <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
-          {% if runtime.probe and runtime.probe.portal_capture and runtime.probe.portal_capture.html_path %}
-          <p><strong>Portal HTML:</strong> <span class="mono">{{ runtime.probe.portal_capture.html_path }}</span></p>
-          {% endif %}
-          {% if portal_ack_available %}
-          <form method="post" action="/portal-ack">
-            <button type="submit" class="secondary-button">Run portal action</button>
-          </form>
-          {% endif %}
-        </div>
-
-        <div class="card">
-          <h2>Software update</h2>
-          <p><strong>Script:</strong> <span class="mono">{{ update_status.script_path }}</span></p>
-          <p><strong>Update job:</strong> <span class="{{ update_status.status_class }}">{{ update_status.summary }}</span></p>
-          {% if update_status.last_started %}
-          <p><strong>Last start:</strong> <span class="mono">{{ update_status.last_started }}</span></p>
-          {% endif %}
-          <form method="post" action="/update">
-            <button type="submit" {% if not update_status.can_start %}disabled{% endif %}>{{ "Update running..." if update_status.running else "Run update script" }}</button>
-          </form>
-          <p class="help-text">Logs: <span class="mono">journalctl -u {{ update_status.service_name }} -n 50</span></p>
-        </div>
-      </div>
-    </section>
+    {% endif %}
   </div>
 
 <script>
@@ -722,25 +803,6 @@ function prefillWifi(ssid, authType, password) {
 
   document.getElementById("password").focus();
 }
-
-function setActiveTab(tabId) {
-  document.querySelectorAll(".tab-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.tab === tabId);
-  });
-  document.querySelectorAll(".tab-panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.id === `tab-${tabId}`);
-  });
-  const url = new URL(window.location.href);
-  url.searchParams.set("tab", tabId);
-  window.history.replaceState({}, "", url);
-}
-
-document.querySelectorAll(".tab-button").forEach((button) => {
-  button.addEventListener("click", () => setActiveTab(button.dataset.tab));
-});
-
-const initialTab = new URLSearchParams(window.location.search).get("tab") || "wifi";
-setActiveTab(initialTab);
 
 const togglePassword = document.getElementById("toggle-password");
 if (togglePassword) {
@@ -858,7 +920,6 @@ document.querySelectorAll(".js-prefill").forEach((element) => {
       element.dataset.authType || "wpa-psk",
       element.dataset.password || ""
     );
-    setActiveTab("wifi");
   });
 });
 </script>

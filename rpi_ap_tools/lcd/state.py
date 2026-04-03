@@ -17,6 +17,19 @@ from rpi_ap_tools.system.network import read_ap_name as resolve_ap_name
 from rpi_ap_tools.system.network import read_ipv4 as resolve_ipv4
 
 
+def _env_float(name, default, minimum=1.0):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, float(raw))
+    except ValueError:
+        return default
+
+
+CAPTIVE_PORTAL_ACK_TIMEOUT_SEC = _env_float("CAPTIVE_PORTAL_ACK_TIMEOUT_SEC", 60.0, minimum=5.0)
+
+
 def read_ap_name(hostapd_conf, ap_config_file, wlan_ap):
     return resolve_ap_name(hostapd_conf, ap_config_file, wlan_ap)
 
@@ -137,7 +150,7 @@ def perform_portal_ack(command):
     if not command:
         return {"ok": False, "message": "No portal ack command configured", "at": time.time()}
     try:
-        proc = subprocess.run(command, text=True, capture_output=True, shell=True, check=False, timeout=20)
+        proc = subprocess.run(command, text=True, capture_output=True, shell=True, check=False, timeout=CAPTIVE_PORTAL_ACK_TIMEOUT_SEC)
         return {"ok": proc.returncode == 0, "message": proc.stdout.strip() or proc.stderr.strip() or "Portal command finished", "at": time.time()}
     except subprocess.TimeoutExpired:
         return {"ok": False, "message": "Portal command timed out", "at": time.time()}

@@ -24,17 +24,17 @@
   - each of the milestones above will be committed locally as its own checkpoint
 
 Changes in this version:
-- Web UI is split into tabs:
+- Web UI is split into dedicated pages:
   - `Wi-Fi`
-  - `YouTube`
+  - `Stream`
   - `Overlay`
-  - `System`
+  - system status and update actions now live on the `Wi-Fi` page
 - Added HTML-to-PNG stream overlay support:
   - Web UI stores an overlay HTML template plus layout settings
   - a background renderer snapshots that HTML to a transparent PNG on a timer
   - the YouTube proxy relay can composite that PNG onto outgoing video
   - HTML/CSS rendering is treated as an authoring step; the relay itself receives PNG frames
-  - changing overlay content updates live without recreating the YouTube stream bundle
+  - changing overlay content or visibility updates live without recreating the YouTube stream bundle
   - changing overlay geometry or opacity reloads the running proxy relay briefly
 - Web UI table is mobile-friendly
 - Clicking a Wi-Fi row prefills:
@@ -55,7 +55,8 @@ Changes in this version:
 - LCD shows a red `AUTH ACTION REQUIRED` warning when NetworkManager reports captive-portal state
 - Optional captive-portal action hook:
   - Set `CAPTIVE_PORTAL_ACK_CMD` to a site-specific command or script
-  - Press `KEY3` on the HAT or use the web button to run it when a portal is suspected
+  - Use the web button to run it when a portal is suspected
+  - The repo now includes `captive_portal_playwright.py` for browser-driven portals that require JavaScript before the real login button appears
 - Web UI software update action:
   - starts `/home/pi/update_ap.sh` through `rpi-ap-update.service`
   - runs outside the Flask service so the web UI can restart safely during install
@@ -71,16 +72,18 @@ Current web UI behavior:
 - Saved passwords are reused and prefilled for the same SSID next time
 - Wi-Fi rows and quick buttons show a saved-password marker for known SSIDs
 - The password field has a show/hide button
-- YouTube section can:
+- Stream page can:
   - start Google device authorization
   - poll for completed authorization
   - create a YouTube Live stream/broadcast pair
   - start a local RTMP passthrough relay on the Pi and show the publish URL / relay details
   - detect the incoming relay video dimensions and show portrait vs landscape once a sender is connected
   - switch proxy relay audio between `Normal`, `Voice Focus`, and `Mute` without reconnecting the sender
+- Overlay visibility now stays live by keeping the proxy relay overlay stage active and swapping in a transparent frame when the overlay is hidden
 - Captive-portal status in the UI is only the Pi uplink's status, not a per-client browser/session test for each device behind `wlan0`
 - Software update section in the UI can:
   - run `/home/pi/update_ap.sh`
+  - choose a Git branch or tag for the next update run
   - show whether the update job is idle, running, or failed
   - keep working even though the update restarts the web UI service, because the job runs in its own oneshot systemd service
 
@@ -150,6 +153,7 @@ YouTube config:
   - `mute` mode sets outgoing audio gain to zero on the running relay
   - relay orientation detection is inferred from the incoming video dimensions seen in the ffmpeg relay log
   - audio mode changes are sent to ffmpeg through `azmq`, so the upstream RTMP sender stays connected
+  - overlay visibility changes reuse the running relay by sending a transparent PNG frame instead of removing the overlay stage
   - this requires an ffmpeg build with `azmq` support and a system `libzmq` shared library available on the Pi
 - Optional relay env vars:
   - `YOUTUBE_PROXY_PUBLISH_URL`
@@ -251,6 +255,7 @@ Suggested storage layout:
 Update runner:
 - systemd unit: `rpi-ap-update.service`
 - default script path: `/home/pi/update_ap.sh`
+- default update-ref handoff file: `/run/rpi_ap_tools_update_ref`
 - manual start: `sudo systemctl start --no-block rpi-ap-update.service`
 - logs: `journalctl -u rpi-ap-update.service -n 50`
 - the repo now ships `update_ap.sh`, and `install.sh` installs it to `/home/pi/update_ap.sh`
@@ -261,6 +266,31 @@ Shared egress / captive portal notes:
 - This bundle now enforces that by using IPv4 shared mode on `wlan0` and disabling IPv6.
 - If a captive portal keys only on hotspot MAC/IP, one authorization on the Pi/uplink should then cover all devices behind `wlan0`.
 - If a captive portal keys on browser cookies, per-device TLS interception, or per-device application login, no generic router-side change can fully collapse all devices into one browser session.
+
+Playwright-based captive portal helper:
+- Some portals only return a JavaScript shell over `curl`, then inject the real button later.
+- Use `captive_portal_playwright.py` when you need a real browser to render the page and click the same approval button again later.
+- Default behavior:
+  - reads the latest portal URL and SSID from `STATUS_PATH`
+  - opens that URL in Chromium through Playwright
+  - fingerprints the rendered page by host plus visible button/text content
+  - reuses a previously learned button for the same portal fingerprint
+  - falls back to cautious text heuristics for obvious buttons such as `Continue`, `Connect`, `Accept`, `Agree`, `Login`, `Use WiFi`, `vao internet`, or `dong y`
+  - stores debug HTML/JSON under `/run/rpi_ap_tools_portal_action`
+  - stores a browser screenshot so the Wi-Fi page can show the real rendered portal and the ranked button candidates
+- Install:
+  - `python3 -m pip install playwright`
+  - `python3 -m playwright install chromium`
+- Typical setup:
+  - `export CAPTIVE_PORTAL_ACK_CMD='python3 /opt/rpi_ap_tools/captive_portal_playwright.py'`
+  - With that command, the web UI `Refresh portal preview` button automatically uses `--preview-only`
+- Useful env vars:
+  - `CAPTIVE_PORTAL_ACK_TIMEOUT_SEC` default `60`
+  - `CAPTIVE_PORTAL_BROWSER_TIMEOUT_SEC` default `45`
+  - `CAPTIVE_PORTAL_BROWSER_BIN` to force a system Chromium path
+  - `CAPTIVE_PORTAL_PREVIEW_CMD` to override the preview command explicitly
+  - `CAPTIVE_PORTAL_RULES_PATH` default `/var/lib/rpi_ap_tools/captive_portal_rules.json`
+  - `CAPTIVE_PORTAL_DEBUG_DIR` default `/run/rpi_ap_tools_portal_action`
 
 AP setup:
 - This bundle expects `wlan0` to be the local AP device and `wlan1` to be the upstream client device.
