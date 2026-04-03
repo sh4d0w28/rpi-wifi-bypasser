@@ -128,6 +128,10 @@ def current_update_ref():
     return _git_stdout(["rev-parse", "--short", "HEAD"])
 
 
+def current_update_commit():
+    return _git_stdout(["rev-parse", "--short", "HEAD"])
+
+
 def update_ref_options():
     branches = [line for line in _git_stdout(["branch", "--format=%(refname:short)"]).splitlines() if line]
     tags = [line for line in _git_stdout(["tag", "--sort=-creatordate"]).splitlines() if line][:20]
@@ -315,10 +319,11 @@ def load_update_status():
     script_exists = UPDATE_SCRIPT_PATH.is_file()
     repo_exists = (UPDATE_REPO_DIR / ".git").is_dir()
     current_ref = current_update_ref() if repo_exists else ""
+    current_commit = current_update_commit() if repo_exists else ""
     requested_ref = load_requested_update_ref()
     ref_options = update_ref_options() if repo_exists else []
     if not props:
-        return {"service_name": UPDATE_SERVICE_NAME, "script_path": str(UPDATE_SCRIPT_PATH), "script_exists": script_exists, "repo_path": str(UPDATE_REPO_DIR), "repo_exists": repo_exists, "current_ref": current_ref, "requested_ref": requested_ref, "ref_input_value": requested_ref or current_ref, "ref_options": ref_options, "service_installed": False, "running": False, "load_state": "unknown", "active_state": "unknown", "sub_state": "unknown", "summary": "update service unavailable", "status_class": "err", "last_started": "", "can_start": False}
+        return {"service_name": UPDATE_SERVICE_NAME, "script_path": str(UPDATE_SCRIPT_PATH), "script_exists": script_exists, "repo_path": str(UPDATE_REPO_DIR), "repo_exists": repo_exists, "current_ref": current_ref, "current_commit": current_commit, "requested_ref": requested_ref, "ref_input_value": requested_ref or current_ref, "ref_options": ref_options, "service_installed": False, "running": False, "load_state": "unknown", "active_state": "unknown", "sub_state": "unknown", "summary": "update service unavailable", "status_class": "err", "last_started": "", "can_start": False}
     load_state = props.get("LoadState", "unknown")
     active_state = props.get("ActiveState", "unknown")
     result = props.get("Result", "")
@@ -340,7 +345,7 @@ def load_update_status():
         summary, status_class = "last run succeeded", "ok"
     else:
         summary, status_class = "idle", ""
-    return {"service_name": UPDATE_SERVICE_NAME, "script_path": str(UPDATE_SCRIPT_PATH), "script_exists": script_exists, "repo_path": str(UPDATE_REPO_DIR), "repo_exists": repo_exists, "current_ref": current_ref, "requested_ref": requested_ref, "ref_input_value": requested_ref or current_ref, "ref_options": ref_options, "service_installed": service_installed, "running": running, "load_state": load_state, "active_state": active_state, "sub_state": props.get("SubState", "unknown"), "summary": summary, "status_class": status_class, "last_started": last_started, "can_start": service_installed and script_exists and repo_exists and not running}
+    return {"service_name": UPDATE_SERVICE_NAME, "script_path": str(UPDATE_SCRIPT_PATH), "script_exists": script_exists, "repo_path": str(UPDATE_REPO_DIR), "repo_exists": repo_exists, "current_ref": current_ref, "current_commit": current_commit, "requested_ref": requested_ref, "ref_input_value": requested_ref or current_ref, "ref_options": ref_options, "service_installed": service_installed, "running": running, "load_state": load_state, "active_state": active_state, "sub_state": props.get("SubState", "unknown"), "summary": summary, "status_class": status_class, "last_started": last_started, "can_start": service_installed and script_exists and repo_exists and not running}
 
 
 def start_update_service(ref_name=""):

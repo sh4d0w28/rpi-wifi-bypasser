@@ -391,6 +391,7 @@
         <div class="hero-badge"><strong>AP</strong> <span class="mono">{{ ap_name }}</span></div>
         <div class="hero-badge"><strong>Uplink</strong> <span class="mono">{{ active.name or 'none' }}</span></div>
         <div class="hero-badge"><strong>Overlay</strong> <span class="mono">{{ 'on' if overlay.enabled else 'off' }}</span></div>
+        <div class="hero-badge"><strong>Build</strong> <span class="mono">{{ update_status.current_ref or '-' }}{% if update_status.current_commit %} @ {{ update_status.current_commit }}{% endif %}</span></div>
       </div>
     </div>
 
@@ -552,7 +553,7 @@
           <h2>Software update</h2>
           <p><strong>Script:</strong> <span class="mono">{{ update_status.script_path }}</span></p>
           <p><strong>Repo:</strong> <span class="mono">{{ update_status.repo_path }}</span></p>
-          <p><strong>Current ref:</strong> <span class="mono">{{ update_status.current_ref or '-' }}</span></p>
+          <p><strong>Current build:</strong> <span class="mono">{{ update_status.current_ref or '-' }}{% if update_status.current_commit %} @ {{ update_status.current_commit }}{% endif %}</span></p>
           <p><strong>Update job:</strong> <span class="{{ update_status.status_class }}">{{ update_status.summary }}</span></p>
           {% if update_status.last_started %}
           <p><strong>Last start:</strong> <span class="mono">{{ update_status.last_started }}</span></p>
