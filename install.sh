@@ -4,6 +4,7 @@ set -euo pipefail
 INSTALL_DIR=/opt/rpi_ap_tools
 WIFI_DB_PATH=${WIFI_DB_PATH:-/etc/rpi_ap_tools_wifi_db.json}
 AP_CONFIG_FILE=${AP_CONFIG_FILE:-/etc/default/rpi_ap_tools_ap}
+PORTAL_ENV_FILE=${PORTAL_ENV_FILE:-/etc/default/rpi_ap_tools_portal}
 YOUTUBE_CLIENT_CONFIG_PATH=${YOUTUBE_CLIENT_CONFIG_PATH:-/etc/rpi_ap_tools_youtube_client.json}
 YOUTUBE_TOKEN_PATH=${YOUTUBE_TOKEN_PATH:-/var/lib/rpi_ap_tools/youtube_token.json}
 YOUTUBE_STREAM_STATE_PATH=${YOUTUBE_STREAM_STATE_PATH:-/var/lib/rpi_ap_tools/youtube_stream.json}
@@ -63,6 +64,16 @@ AP_CHANNEL=6
 EOF"
 fi
 sudo chmod 600 "$AP_CONFIG_FILE" || true
+
+# Preserve captive portal helper environment across reinstalls/upgrades.
+sudo mkdir -p "$(dirname "$PORTAL_ENV_FILE")"
+if [ ! -f "$PORTAL_ENV_FILE" ]; then
+  sudo sh -c "cat > '$PORTAL_ENV_FILE' <<'EOF'
+# Environment for the captive portal preview / ack helper
+CAPTIVE_PORTAL_BROWSER_BIN=/usr/bin/chromium
+EOF"
+fi
+sudo chmod 600 "$PORTAL_ENV_FILE" || true
 
 # App config and persistent secret/state directories.
 sudo mkdir -p "$(dirname "$YOUTUBE_CLIENT_CONFIG_PATH")"
@@ -142,6 +153,7 @@ echo "Installed."
 echo "Prepared files:"
 echo "  Wi-Fi DB: $WIFI_DB_PATH"
 echo "  AP config: $AP_CONFIG_FILE"
+echo "  Portal env: $PORTAL_ENV_FILE"
 echo "  YouTube client config: $YOUTUBE_CLIENT_CONFIG_PATH"
 echo "  YouTube token: $YOUTUBE_TOKEN_PATH"
 echo "  YouTube stream state: $YOUTUBE_STREAM_STATE_PATH"
