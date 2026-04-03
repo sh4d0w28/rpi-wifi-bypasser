@@ -310,6 +310,28 @@
       box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.25);
       background: rgba(56, 189, 248, 0.12);
     }
+    .remote-browser-image {
+      position: relative;
+      cursor: crosshair;
+    }
+    .remote-browser-image img {
+      width: 100%;
+      display: block;
+      object-fit: contain;
+    }
+    .remote-browser-controls {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .remote-browser-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+    }
+    .remote-browser-grid button {
+      width: 100%;
+    }
     .checkbox-row {
       display: flex;
       align-items: center;
@@ -590,6 +612,42 @@
           {% endfor %}
         </div>
         {% endif %}
+      </div>
+      <div class="card">
+        <h2>Portal live control</h2>
+        <p class="help-text">This keeps a Playwright page open on the Pi. The screenshot auto-refreshes, and clicks or key presses are sent back to that page.</p>
+        <p><strong>Target URL:</strong> <span id="portal-remote-target" class="mono">{{ portal_browser.target_url or '-' }}</span></p>
+        <p><strong>Current URL:</strong> <span id="portal-remote-url" class="mono">{{ portal_browser.current_url or '-' }}</span></p>
+        <p><strong>Status:</strong> <span id="portal-remote-status" class="mono">{{ portal_browser.message or portal_browser.last_error or ('session open' if portal_browser.session_open else 'idle') }}</span></p>
+        <div class="overlay-preview remote-browser-image">
+          {% if portal_browser.image_exists %}
+          <img id="portal-remote-image" src="{{ url_for('system.portal_remote_image') }}?ts={{ portal_browser.image_ts }}" alt="Portal live browser">
+          {% else %}
+          <img id="portal-remote-image" src="" alt="Portal live browser" class="is-hidden">
+          <p id="portal-remote-empty" class="help-text">Start the portal browser session to see a live screenshot here.</p>
+          {% endif %}
+        </div>
+        <div class="remote-browser-controls">
+          <div class="remote-browser-grid">
+            <button type="button" id="portal-remote-start">Start session</button>
+            <button type="button" id="portal-remote-reload" class="secondary-button">Reload</button>
+            <button type="button" id="portal-remote-stop" class="secondary-button">Stop</button>
+            <button type="button" id="portal-remote-refresh" class="secondary-button">Refresh image</button>
+          </div>
+          <div class="field-row">
+            <input id="portal-remote-text" type="text" placeholder="Type into the currently focused portal field">
+            <button type="button" id="portal-remote-type" class="secondary-button">Type</button>
+          </div>
+          <div class="remote-browser-grid">
+            <button type="button" class="secondary-button js-portal-key" data-key="Tab">Tab</button>
+            <button type="button" class="secondary-button js-portal-key" data-key="Enter">Enter</button>
+            <button type="button" class="secondary-button js-portal-key" data-key="Space">Space</button>
+            <button type="button" class="secondary-button js-portal-key" data-key="Backspace">Backspace</button>
+            <button type="button" class="secondary-button js-portal-scroll" data-delta="-500">Scroll Up</button>
+            <button type="button" class="secondary-button js-portal-scroll" data-delta="500">Scroll Down</button>
+          </div>
+          <p class="help-text">Click anywhere on the screenshot to send a click to that spot in the Pi browser viewport.</p>
+        </div>
       </div>
     </section>
     {% elif current_page == 'stream' %}
@@ -963,6 +1021,146 @@ document.querySelectorAll(".js-prefill").forEach((element) => {
     );
   });
 });
+
+const portalRemoteImage = document.getElementById("portal-remote-image");
+const portalRemoteEmpty = document.getElementById("portal-remote-empty");
+const portalRemoteStatus = document.getElementById("portal-remote-status");
+const portalRemoteUrl = document.getElementById("portal-remote-url");
+const portalRemoteTarget = document.getElementById("portal-remote-target");
+const portalRemoteText = document.getElementById("portal-remote-text");
+
+function portalRemoteSetStatus(payload) {
+  if (!portalRemoteStatus || !payload) {
+    return;
+  }
+  if (portalRemoteStatus) {
+    portalRemoteStatus.textContent = payload.message || payload.last_error || (payload.session_open ? "session open" : "idle");
+  }
+  if (portalRemoteUrl) {
+    portalRemoteUrl.textContent = payload.current_url || "-";
+  }
+  if (portalRemoteTarget) {
+    portalRemoteTarget.textContent = payload.target_url || "-";
+  }
+  if (portalRemoteImage) {
+    const hasImage = !!payload.image_exists;
+    portalRemoteImage.classList.toggle("is-hidden", !hasImage);
+    if (hasImage) {
+      portalRemoteImage.src = `/portal-remote/image?ts=${payload.image_ts || Date.now()}`;
+    }
+  }
+  if (portalRemoteEmpty) {
+    portalRemoteEmpty.classList.toggle("is-hidden", !!payload.image_exists);
+  }
+}
+
+async function portalRemoteRequest(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(payload || {}),
+  });
+  const data = await response.json();
+  portalRemoteSetStatus(data);
+  return data;
+}
+
+async function portalRemotePollStatus() {
+  if (!portalRemoteStatus) {
+    return;
+  }
+  try {
+    const response = await fetch("/portal-remote/status", {cache: "no-store"});
+    const data = await response.json();
+    portalRemoteSetStatus(data);
+  } catch (error) {
+    portalRemoteStatus.textContent = "Portal live control unavailable";
+  }
+}
+
+const portalRemoteStart = document.getElementById("portal-remote-start");
+if (portalRemoteStart) {
+  portalRemoteStart.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/start");
+  });
+}
+
+const portalRemoteReload = document.getElementById("portal-remote-reload");
+if (portalRemoteReload) {
+  portalRemoteReload.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/reload");
+  });
+}
+
+const portalRemoteStop = document.getElementById("portal-remote-stop");
+if (portalRemoteStop) {
+  portalRemoteStop.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/stop");
+  });
+}
+
+const portalRemoteRefresh = document.getElementById("portal-remote-refresh");
+if (portalRemoteRefresh) {
+  portalRemoteRefresh.addEventListener("click", async () => {
+    await portalRemotePollStatus();
+  });
+}
+
+const portalRemoteType = document.getElementById("portal-remote-type");
+if (portalRemoteType && portalRemoteText) {
+  portalRemoteType.addEventListener("click", async () => {
+    const text = portalRemoteText.value || "";
+    if (!text) {
+      return;
+    }
+    await portalRemoteRequest("/portal-remote/type", {text});
+    portalRemoteText.focus();
+    portalRemoteText.select();
+  });
+}
+
+if (portalRemoteText) {
+  portalRemoteText.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    const text = portalRemoteText.value || "";
+    if (!text) {
+      return;
+    }
+    await portalRemoteRequest("/portal-remote/type", {text});
+  });
+}
+
+document.querySelectorAll(".js-portal-key").forEach((element) => {
+  element.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/key", {key: element.dataset.key || ""});
+  });
+});
+
+document.querySelectorAll(".js-portal-scroll").forEach((element) => {
+  element.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/scroll", {delta_y: Number(element.dataset.delta || "0")});
+  });
+});
+
+if (portalRemoteImage) {
+  portalRemoteImage.addEventListener("click", async (event) => {
+    const rect = portalRemoteImage.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return;
+    }
+    const xRatio = (event.clientX - rect.left) / rect.width;
+    const yRatio = (event.clientY - rect.top) / rect.height;
+    await portalRemoteRequest("/portal-remote/click", {x_ratio: xRatio, y_ratio: yRatio});
+  });
+}
+
+if (portalRemoteStatus) {
+  portalRemotePollStatus();
+  window.setInterval(portalRemotePollStatus, 3000);
+}
 </script>
 </body>
 </html>
