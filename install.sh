@@ -5,6 +5,7 @@ INSTALL_DIR=/opt/rpi_ap_tools
 WIFI_DB_PATH=${WIFI_DB_PATH:-/etc/rpi_ap_tools_wifi_db.json}
 AP_CONFIG_FILE=${AP_CONFIG_FILE:-/etc/default/rpi_ap_tools_ap}
 PORTAL_ENV_FILE=${PORTAL_ENV_FILE:-/etc/default/rpi_ap_tools_portal}
+PORTAL_ACK_PYTHON=${PORTAL_ACK_PYTHON:-$INSTALL_DIR/.venv/bin/python}
 YOUTUBE_CLIENT_CONFIG_PATH=${YOUTUBE_CLIENT_CONFIG_PATH:-/etc/rpi_ap_tools_youtube_client.json}
 YOUTUBE_TOKEN_PATH=${YOUTUBE_TOKEN_PATH:-/var/lib/rpi_ap_tools/youtube_token.json}
 YOUTUBE_STREAM_STATE_PATH=${YOUTUBE_STREAM_STATE_PATH:-/var/lib/rpi_ap_tools/youtube_stream.json}
@@ -42,6 +43,16 @@ install_chromium_if_available() {
 
 install_chromium_if_available || true
 
+append_env_if_missing() {
+  local env_file=$1
+  local key=$2
+  local value=$3
+  if sudo grep -q "^${key}=" "$env_file" 2>/dev/null; then
+    return 0
+  fi
+  sudo sh -c "printf '%s=\"%s\"\n' '$key' '$value' >> '$env_file'"
+}
+
 # Preserve saved Wi-Fi credentials across reinstalls/upgrades.
 sudo mkdir -p "$(dirname "$WIFI_DB_PATH")"
 if [ ! -f "$WIFI_DB_PATH" ]; then
@@ -72,6 +83,10 @@ if [ ! -f "$PORTAL_ENV_FILE" ]; then
 # Environment for the captive portal preview / ack helper
 CAPTIVE_PORTAL_BROWSER_BIN=/usr/bin/chromium
 EOF"
+fi
+append_env_if_missing "$PORTAL_ENV_FILE" CAPTIVE_PORTAL_BROWSER_BIN /usr/bin/chromium
+if [ -x "$PORTAL_ACK_PYTHON" ]; then
+  append_env_if_missing "$PORTAL_ENV_FILE" CAPTIVE_PORTAL_ACK_CMD "$PORTAL_ACK_PYTHON $INSTALL_DIR/captive_portal_playwright.py"
 fi
 sudo chmod 600 "$PORTAL_ENV_FILE" || true
 
@@ -154,6 +169,9 @@ echo "Prepared files:"
 echo "  Wi-Fi DB: $WIFI_DB_PATH"
 echo "  AP config: $AP_CONFIG_FILE"
 echo "  Portal env: $PORTAL_ENV_FILE"
+if [ -x "$PORTAL_ACK_PYTHON" ]; then
+  echo "  Portal helper: $PORTAL_ACK_PYTHON $INSTALL_DIR/captive_portal_playwright.py"
+fi
 echo "  YouTube client config: $YOUTUBE_CLIENT_CONFIG_PATH"
 echo "  YouTube token: $YOUTUBE_TOKEN_PATH"
 echo "  YouTube stream state: $YOUTUBE_STREAM_STATE_PATH"
@@ -173,10 +191,11 @@ esac
 echo "Next steps:"
 echo "  1. Verify or edit $YOUTUBE_CLIENT_CONFIG_PATH"
 echo "  2. Confirm shared egress config if your hotspot uses a captive portal"
-echo "     Optional browser-based portal ack helper:"
-echo "       python3 -m pip install playwright"
-echo "       python3 -m playwright install chromium"
-echo "       export CAPTIVE_PORTAL_ACK_CMD='python3 $INSTALL_DIR/captive_portal_playwright.py'"
+echo "     Browser-based portal helper env lives in $PORTAL_ENV_FILE"
+echo "     Chromium binary defaults to /usr/bin/chromium"
+if [ ! -x "$PORTAL_ACK_PYTHON" ]; then
+  echo "     To enable Playwright portal automation, create a venv at $INSTALL_DIR/.venv and install playwright there."
+fi
 echo "  3. Restart services"
 echo "  4. Open the web UI and use Start YouTube auth"
 echo "Shared egress reconfigure:"
