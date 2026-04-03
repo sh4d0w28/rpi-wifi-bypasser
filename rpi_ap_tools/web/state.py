@@ -66,6 +66,10 @@ def index_context():
         "youtube_creation_log": youtube_creation_log,
         "youtube_stream": youtube_stream,
         "youtube_audio_modes": list_audio_modes(),
+        "youtube_privacy_modes": [
+            {"value": "public", "label": "Public"},
+            {"value": "private", "label": "Private"},
+        ],
         "youtube_fps_modes": list_fps_modes(),
         "youtube_rotation_modes": list_rotation_modes(),
         "overlay": overlay,

@@ -720,6 +720,12 @@
               <option value="{{ item.value }}" {% if (youtube_creation and youtube_creation.audio_mode == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.audio_mode == item.value) or ((not youtube_stream or not youtube_stream.audio_mode) and item.value == 'normal') %}selected{% endif %}>{{ item.label }}</option>
               {% endfor %}
             </select>
+            <label for="youtube-privacy-status">Privacy</label>
+            <select id="youtube-privacy-status" name="privacy_status">
+              {% for item in youtube_privacy_modes %}
+              <option value="{{ item.value }}" {% if (youtube_creation and youtube_creation.privacy_status == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.privacy_status == item.value) or ((not youtube_stream or not youtube_stream.privacy_status) and item.value == 'public') %}selected{% endif %}>{{ item.label }}</option>
+              {% endfor %}
+            </select>
             <label for="youtube-rotation">Rotation</label>
             <select id="youtube-rotation" name="rotation">
               {% for item in youtube_rotation_modes %}

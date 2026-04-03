@@ -17,6 +17,13 @@ from .storage import load_creation_state, load_overlay_state, reset_creation_log
 LOGGER = logging.getLogger(__name__)
 
 
+def normalize_privacy_status(value):
+    privacy = str(value or "").strip().lower()
+    if privacy in ("public", "private"):
+        return privacy
+    return STREAM_PRIVACY_STATUS
+
+
 def default_stream_title():
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return f"{STREAM_TITLE_PREFIX} {stamp}"
@@ -46,11 +53,12 @@ def creation_in_progress():
     return state.get("status") == "creating"
 
 
-def create_stream_bundle(*, api_request_fn, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
+def create_stream_bundle(*, api_request_fn, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None, privacy_status=None):
     title = (title or "").strip() or default_stream_title()
     audio_mode = normalize_audio_mode(audio_mode)
     rotation = normalize_rotation_mode(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
+    privacy_status = normalize_privacy_status(privacy_status)
     LOGGER.info("YouTube stream creation request started: title=%s ap_ip=%s", title, ap_ip)
     LOGGER.info("Creating YouTube liveStream resource and waiting for API response")
     update_creation_state(fields={"status": "creating", "message": "Creating stream target", "progress_pct": 20, "stage": "stream"})
@@ -78,7 +86,7 @@ def create_stream_bundle(*, api_request_fn, ap_ip="-", title=None, rotation=None
         params={"part": "snippet,status,contentDetails"},
         body={
             "snippet": {"title": title, "scheduledStartTime": scheduled_start},
-            "status": {"privacyStatus": STREAM_PRIVACY_STATUS, "selfDeclaredMadeForKids": False},
+            "status": {"privacyStatus": privacy_status, "selfDeclaredMadeForKids": False},
             "contentDetails": {
                 "enableAutoStart": True,
                 "enableAutoStop": True,
@@ -103,7 +111,7 @@ def create_stream_bundle(*, api_request_fn, ap_ip="-", title=None, rotation=None
         "stream_name": stream_name,
         "ingestion_address": ingestion_info.get("ingestionAddress", ""),
         "rtmps_ingestion_address": ingestion_info.get("rtmpsIngestionAddress", ""),
-        "privacy_status": STREAM_PRIVACY_STATUS,
+        "privacy_status": privacy_status,
         "ap_ip": ap_ip,
         "audio_mode": audio_mode if PROXY_ENABLED else "normal",
         "rotation": rotation,
@@ -127,7 +135,7 @@ def create_stream_bundle(*, api_request_fn, ap_ip="-", title=None, rotation=None
     return state
 
 
-def run_creation_job(*, api_request_fn, ap_ip, title, rotation, fps_mode, audio_mode):
+def run_creation_job(*, api_request_fn, ap_ip, title, rotation, fps_mode, audio_mode, privacy_status):
     try:
         update_creation_state(fields={"pid": os.getpid(), "status": "creating"})
         LOGGER.info(
@@ -145,6 +153,7 @@ def run_creation_job(*, api_request_fn, ap_ip, title, rotation, fps_mode, audio_
             rotation=rotation,
             fps_mode=fps_mode,
             audio_mode=audio_mode,
+            privacy_status=privacy_status,
         )
         save_creation_state(
             {
@@ -178,7 +187,7 @@ def run_creation_job(*, api_request_fn, ap_ip, title, rotation, fps_mode, audio_
         raise
 
 
-def start_stream_creation(*, validate_live_access_fn, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
+def start_stream_creation(*, validate_live_access_fn, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None, privacy_status=None):
     if creation_in_progress():
         LOGGER.warning("Rejected YouTube stream creation request because one is already in progress")
         raise YouTubeLiveError("Stream creation already in progress")
@@ -190,6 +199,7 @@ def start_stream_creation(*, validate_live_access_fn, ap_ip="-", title=None, rot
     audio_mode = normalize_audio_mode(audio_mode)
     rotation = normalize_rotation_mode(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
+    privacy_status = normalize_privacy_status(privacy_status)
     fd = _lock_creation()
     try:
         if creation_in_progress():
@@ -208,16 +218,18 @@ def start_stream_creation(*, validate_live_access_fn, ap_ip="-", title=None, rot
                 "audio_mode": audio_mode,
                 "rotation": rotation,
                 "fps_mode": fps_mode,
+                "privacy_status": privacy_status,
                 "log_path": str(CREATION_LOG_PATH),
             }
         )
         LOGGER.info(
-            "Starting background YouTube stream creation process: ap_ip=%s title=%s audio_mode=%s rotation=%s fps_mode=%s",
+            "Starting background YouTube stream creation process: ap_ip=%s title=%s audio_mode=%s rotation=%s fps_mode=%s privacy=%s",
             ap_ip,
             title or "",
             audio_mode,
             rotation,
             fps_mode,
+            privacy_status,
         )
         argv = [sys.executable, str(Path(__file__).resolve().parent / "legacy.py"), "create", "--ap-ip", ap_ip or "-"]
         if title:
@@ -228,6 +240,8 @@ def start_stream_creation(*, validate_live_access_fn, ap_ip="-", title=None, rot
             argv.extend(["--rotation", rotation])
         if fps_mode != "original":
             argv.extend(["--fps-mode", fps_mode])
+        if privacy_status != STREAM_PRIVACY_STATUS:
+            argv.extend(["--privacy-status", privacy_status])
         log_handle = CREATION_LOG_PATH.open("ab")
         try:
             proc = subprocess.Popen(

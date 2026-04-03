@@ -1584,7 +1584,7 @@ def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None,
     )
 
 
-def _run_creation_job(ap_ip, title, rotation, fps_mode, audio_mode):
+def _run_creation_job(ap_ip, title, rotation, fps_mode, audio_mode, privacy_status):
     return service_run_creation_job(
         api_request_fn=_api_request,
         ap_ip=ap_ip,
@@ -1592,10 +1592,11 @@ def _run_creation_job(ap_ip, title, rotation, fps_mode, audio_mode):
         rotation=rotation,
         fps_mode=fps_mode,
         audio_mode=audio_mode,
+        privacy_status=privacy_status,
     )
 
 
-def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
+def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None, privacy_status=None):
     return service_start_stream_creation(
         validate_live_access_fn=validate_live_access,
         ap_ip=ap_ip,
@@ -1603,6 +1604,7 @@ def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None
         rotation=rotation,
         fps_mode=fps_mode,
         audio_mode=audio_mode,
+        privacy_status=privacy_status,
     )
 
 
@@ -1646,6 +1648,7 @@ def _parse_cli_args(argv):
     audio_mode = DEFAULT_PROXY_AUDIO_MODE
     rotation = "0"
     fps_mode = "original"
+    privacy_status = None
     idx = 0
     while idx < len(argv):
         item = argv[idx]
@@ -1669,6 +1672,10 @@ def _parse_cli_args(argv):
             fps_mode = argv[idx + 1]
             idx += 2
             continue
+        if item == "--privacy-status" and idx + 1 < len(argv):
+            privacy_status = argv[idx + 1]
+            idx += 2
+            continue
         idx += 1
     return (
         ap_ip,
@@ -1676,6 +1683,7 @@ def _parse_cli_args(argv):
         normalize_audio_mode(audio_mode),
         normalize_rotation_mode(rotation),
         normalize_fps_mode(fps_mode),
+        privacy_status,
     )
 
 
@@ -1718,8 +1726,8 @@ def _run_overlay_feed(png_path, interval):
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "create":
         logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s", force=True)
-        cli_ap_ip, cli_title, cli_audio_mode, cli_rotation, cli_fps_mode = _parse_cli_args(sys.argv[2:])
-        _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode, cli_audio_mode)
+        cli_ap_ip, cli_title, cli_audio_mode, cli_rotation, cli_fps_mode, cli_privacy_status = _parse_cli_args(sys.argv[2:])
+        _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode, cli_audio_mode, cli_privacy_status)
     elif len(sys.argv) >= 2 and sys.argv[1] == "overlay-feed":
         cli_png_path, cli_interval = _parse_overlay_feed_args(sys.argv[2:])
         _run_overlay_feed(cli_png_path, cli_interval)
