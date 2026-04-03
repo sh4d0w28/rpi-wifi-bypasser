@@ -2,7 +2,7 @@ from pathlib import Path
 
 from flask import Flask
 
-from rpi_ap_tools.web import state
+from rpi_ap_tools.web.services.overlay_render_service import start_overlay_renderer_thread, start_relay_watchdog_thread
 from rpi_ap_tools.web.routes.overlay import bp as overlay_bp
 from rpi_ap_tools.web.routes.system import bp as system_bp
 from rpi_ap_tools.web.routes.wifi import bp as wifi_bp
@@ -16,8 +16,8 @@ def create_app():
     app.register_blueprint(wifi_bp)
     app.register_blueprint(overlay_bp)
     app.register_blueprint(youtube_bp)
-    state.start_overlay_renderer_thread(app)
-    state.start_relay_watchdog_thread()
+    start_overlay_renderer_thread(app)
+    start_relay_watchdog_thread()
     return app
 
 

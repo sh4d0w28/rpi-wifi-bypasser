@@ -3,6 +3,8 @@ from flask import Blueprint, Response, flash, redirect, request, url_for
 from youtube_live import YouTubeLiveError
 
 from rpi_ap_tools.web import state
+from rpi_ap_tools.web.services.overlay_render_service import load_runtime_status
+from rpi_ap_tools.web.services.wifi_service import get_ip
 
 bp = Blueprint("youtube", __name__)
 
@@ -36,8 +38,8 @@ def youtube_create():
     audio_mode = request.form.get("audio_mode", "normal").strip()
     rotation = request.form.get("rotation", "0").strip()
     fps_mode = request.form.get("fps_mode", "original").strip()
-    ap_ip = state.get_ip("wlan0").split("/", 1)[0]
-    runtime = state.load_runtime_status()
+    ap_ip = get_ip("wlan0").split("/", 1)[0]
+    runtime = load_runtime_status()
     probe = runtime.get("probe", {}) if isinstance(runtime, dict) else {}
     auth = state.get_auth_status()
     if probe.get("auth_required") or not auth.get("authorized"):
@@ -91,4 +93,3 @@ def youtube_creation_log():
     if not text:
         text = f"No creation log yet.\nExpected path: {payload.get('path', '-')}\n"
     return Response(text, mimetype="text/plain")
-
