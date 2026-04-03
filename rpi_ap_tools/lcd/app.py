@@ -163,6 +163,7 @@ def main():
     youtube_stream = load_stream_state()
     youtube_status_message = "Use YT menu"
     youtube_create_audio_mode = youtube_creation.get("audio_mode") or youtube_stream.get("audio_mode", "normal")
+    youtube_create_privacy_status = youtube_creation.get("privacy_status") or youtube_stream.get("privacy_status", "public")
     youtube_create_rotation = youtube_creation.get("rotation") or youtube_stream.get("rotation", "0")
     youtube_create_fps_mode = youtube_creation.get("fps_mode") or youtube_stream.get("fps_mode", "original")
     menu_stack = [{"id": "root", "selected": 0}]
@@ -185,7 +186,7 @@ def main():
         ui_message = fit_text(message or "", 20)
 
     def selector_menu_ids():
-        return {"youtube_create_audio", "youtube_create_rotation", "youtube_create_fps"}
+        return {"youtube_create_audio", "youtube_create_privacy", "youtube_create_rotation", "youtube_create_fps"}
 
     def menu_definition_for(menu_id, selected=0):
         title, items = get_menu_definition(menu_id)
@@ -235,6 +236,7 @@ def main():
     def default_create_settings():
         return (
             youtube_creation.get("audio_mode") or youtube_stream.get("audio_mode", "normal"),
+            youtube_creation.get("privacy_status") or youtube_stream.get("privacy_status", "public"),
             youtube_creation.get("rotation") or youtube_stream.get("rotation", "0"),
             youtube_creation.get("fps_mode") or youtube_stream.get("fps_mode", "original"),
         )
@@ -290,10 +292,12 @@ def main():
             return "YouTube", items
         if menu_id == "youtube_create":
             audio_label = {"normal": "NORM", "voice": "VOICE", "mute": "MUTE"}.get(youtube_create_audio_mode, youtube_create_audio_mode.upper())
+            privacy_label = {"public": "PUB", "private": "PRIV"}.get(youtube_create_privacy_status, youtube_create_privacy_status.upper())
             rotation_label = {"0": "OFF", "90": "+90", "-90": "-90"}.get(youtube_create_rotation, youtube_create_rotation)
             fps_label = {"original": "ORIG", "30": "30FPS", "20": "20FPS"}.get(youtube_create_fps_mode, youtube_create_fps_mode.upper())
             items = [
                 {"label": "Use Defaults", "kind": "action", "action": "youtube_create_defaults"},
+                {"label": f"Privacy {privacy_label}", "kind": "menu", "target": "youtube_create_privacy"},
                 {"label": f"Rotation {rotation_label}", "kind": "menu", "target": "youtube_create_rotation"},
                 {"label": f"FPS {fps_label}", "kind": "menu", "target": "youtube_create_fps"},
                 {"label": f"Sound {audio_label}", "kind": "menu", "target": "youtube_create_audio"},
@@ -302,6 +306,8 @@ def main():
             return "Create", items
         if menu_id == "youtube_create_audio":
             return "Create Audio", [{"label": label, "kind": "action", "action": "youtube_create_audio", "arg": mode, "checked": youtube_create_audio_mode == mode} for mode, label in (("normal", "Audio Normal"), ("voice", "Audio Voice"), ("mute", "Audio Mute"))]
+        if menu_id == "youtube_create_privacy":
+            return "Create Privacy", [{"label": label, "kind": "action", "action": "youtube_create_privacy", "arg": mode, "checked": youtube_create_privacy_status == mode} for mode, label in (("public", "Public"), ("private", "Private"))]
         if menu_id == "youtube_create_rotation":
             return "Create Rotate", [{"label": label, "kind": "action", "action": "youtube_create_rotation", "arg": mode, "checked": youtube_create_rotation == mode} for mode, label in (("90", "Rotate 90"), ("0", "Rotate Off"), ("-90", "Rotate -90"))]
         if menu_id == "youtube_create_fps":
@@ -382,6 +388,7 @@ def main():
                     "title": youtube_stream.get("title", ""),
                     "watch_url": youtube_stream.get("watch_url", ""),
                     "qr_payload": youtube_stream.get("qr_payload", ""),
+                    "privacy_status": youtube_stream.get("privacy_status", ""),
                     "rotation_short": youtube_stream.get("rotation_short", "OFF"),
                     "fps_mode_short": youtube_stream.get("fps_mode_short", "ORIG"),
                     "incoming_res": stream_input_resolution_text(),
@@ -393,6 +400,7 @@ def main():
                     "auth_required": probe_cache.get("auth_required") or not youtube_auth.get("authorized"),
                 },
                 "settings_rtmp": rtmp_summary_text(),
+                "settings_privacy": {"public": "PUB", "private": "PRIV"}.get(youtube_create_privacy_status, youtube_create_privacy_status.upper()),
                 "settings_rotation": {"0": "OFF", "90": "+90", "-90": "-90"}.get(youtube_create_rotation, youtube_create_rotation),
                 "settings_fps": {"original": "ORIG", "30": "30FPS", "20": "20FPS"}.get(youtube_create_fps_mode, youtube_create_fps_mode.upper()),
                 "settings_audio": {"normal": "NORM", "voice": "VOICE", "mute": "MUTE"}.get(youtube_create_audio_mode, youtube_create_audio_mode.upper()),
@@ -430,9 +438,11 @@ def main():
             menu_stack.pop()
 
     def trigger_simple_setting(target_name, value, message):
-        nonlocal youtube_create_audio_mode, youtube_create_rotation, youtube_create_fps_mode
+        nonlocal youtube_create_audio_mode, youtube_create_privacy_status, youtube_create_rotation, youtube_create_fps_mode
         if target_name == "audio":
             youtube_create_audio_mode = value
+        elif target_name == "privacy":
+            youtube_create_privacy_status = value
         elif target_name == "rotation":
             youtube_create_rotation = value
         else:
@@ -441,12 +451,45 @@ def main():
         close_submenu()
 
     def trigger_youtube_action(action):
-        nonlocal youtube_auth, youtube_creation, youtube_status_message, current_screen, ui_mode, youtube_create_rotation, youtube_create_fps_mode
+        nonlocal youtube_auth, youtube_creation, youtube_status_message, current_screen, ui_mode, youtube_create_privacy_status, youtube_create_rotation, youtube_create_fps_mode
         if action == "youtube_create_defaults":
-            audio_mode, rotation, fps_mode = default_create_settings()
+            audio_mode, privacy_status, rotation, fps_mode = default_create_settings()
+            youtube_create_privacy_status = privacy_status
             youtube_create_rotation = rotation
             youtube_create_fps_mode = fps_mode
             trigger_simple_setting("audio", audio_mode, "Defaults loaded")
+            return
+        if action == "youtube_auth_poll":
+            try:
+                poll_device_authorization()
+                youtube_auth = get_auth_status()
+                youtube_status_message = "YouTube auth OK"
+                set_ui_message("Auth complete")
+            except YouTubeLiveError as exc:
+                youtube_auth = get_auth_status()
+                youtube_status_message = fit_text(str(exc), 20)
+                set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+            ui_mode = "screen"
+            return
+        if action == "youtube_create":
+            try:
+                start_stream_creation(
+                    ap_ip=w0,
+                    title=ap_name,
+                    audio_mode=youtube_create_audio_mode,
+                    privacy_status=youtube_create_privacy_status,
+                    rotation=youtube_create_rotation,
+                    fps_mode=youtube_create_fps_mode,
+                )
+                youtube_creation = load_creation_state()
+                youtube_status_message = "Stream creating"
+                set_ui_message(f"Create {youtube_create_privacy_status.upper()}")
+            except YouTubeLiveError as exc:
+                youtube_status_message = fit_text(str(exc), 20)
+                set_ui_message(youtube_status_message)
+            current_screen = "youtube"
+            ui_mode = "screen"
             return
         if action in ("youtube_auth_start", "youtube_auth_restart"):
             try:
@@ -484,6 +527,8 @@ def main():
             trigger_youtube_action(action)
         elif action == "youtube_create_audio":
             trigger_simple_setting("audio", item.get("arg", "normal"), f"Sound {item.get('arg', 'normal').upper()}")
+        elif action == "youtube_create_privacy":
+            trigger_simple_setting("privacy", item.get("arg", "public"), f"Privacy {item.get('arg', 'public').upper()}")
         elif action == "youtube_create_rotation":
             trigger_simple_setting("rotation", item.get("arg", "0"), f"Create rot {item.get('arg', '0')}")
         elif action == "youtube_create_fps":

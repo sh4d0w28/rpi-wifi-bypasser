@@ -37,6 +37,7 @@ def chrome_screen_id(state):
             "youtube": "YT",
             "youtube_create": "YT",
             "youtube_create_audio": "YT",
+            "youtube_create_privacy": "YT",
             "youtube_create_rotation": "YT",
             "youtube_create_fps": "YT",
             "update_confirm": "UPD",
@@ -294,6 +295,7 @@ def render_youtube(draw, image, state):
     rows = [
         ("Name", fit_text(youtube.get("title", "No stream"), 16), (240, 244, 255)),
         ("RTMP", fit_text(youtube.get("rtmp_summary", "-"), 14), (120, 220, 255)),
+        ("Priv", fit_text((youtube.get("privacy_status") or "public").upper(), 14), (255, 210, 90)),
         ("Rot", youtube.get("rotation_short", "OFF"), (255, 210, 90)),
         ("FPS", youtube.get("fps_mode_short", "ORIG"), (120, 255, 160)),
         ("In", youtube.get("incoming_res") or "-", (240, 244, 255)),
@@ -325,6 +327,7 @@ def render_youtube_qr(draw, image, state):
 def render_settings(draw, state):
     rows = [
         ("RTMP", fit_text(state.get("settings_rtmp", "-"), 14), (120, 220, 255)),
+        ("Priv", state.get("settings_privacy", "PUB"), (255, 210, 90)),
         ("Rot", state.get("settings_rotation", "0"), (255, 210, 90)),
         ("FPS", state.get("settings_fps", "ORIG"), (120, 255, 160)),
         ("Snd", state.get("settings_audio", "NORM"), (240, 244, 255)),
