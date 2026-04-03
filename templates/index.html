@@ -509,6 +509,11 @@
           {% if runtime.probe and runtime.probe.portal_capture and runtime.probe.portal_capture.html_path %}
           <p><strong>Portal HTML:</strong> <span class="mono">{{ runtime.probe.portal_capture.html_path }}</span></p>
           {% endif %}
+          {% if portal_capture_available %}
+          <form method="post" action="/portal-capture">
+            <button type="submit" class="secondary-button">Refresh portal capture</button>
+          </form>
+          {% endif %}
           {% if portal_preview_available %}
           <form method="post" action="/portal-preview">
             <button type="submit" class="secondary-button">Refresh portal preview</button>

@@ -1,14 +1,20 @@
 import os
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
-from rpi_ap_tools.core.files import load_json_file
+from rpi_ap_tools.core.files import atomic_write_json, load_json_file
 from rpi_ap_tools.core.process import run_command
+from rpi_ap_tools.lcd.state import capture_portal_response, read_active_wifi
 
 CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
 CAPTIVE_PORTAL_PREVIEW_CMD = os.environ.get("CAPTIVE_PORTAL_PREVIEW_CMD", "").strip()
 CAPTIVE_PORTAL_DEBUG_DIR = Path(os.environ.get("CAPTIVE_PORTAL_DEBUG_DIR", "/run/rpi_ap_tools_portal_action").strip() or "/run/rpi_ap_tools_portal_action")
+CAPTIVE_PORTAL_CAPTURE_URL = os.environ.get("PORTAL_CAPTURE_URL", "http://connectivitycheck.gstatic.com/generate_204").strip()
+CAPTIVE_PORTAL_CAPTURE_HTML_PATH = Path(os.environ.get("PORTAL_CAPTURE_HTML_PATH", "/run/rpi_ap_tools_captive_portal.html"))
+STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
+WLAN_IFACE = os.environ.get("WLAN1_IFACE", "wlan1").strip() or "wlan1"
 UPDATE_SERVICE_NAME = os.environ.get("UPDATE_SERVICE_NAME", "rpi-ap-update.service").strip() or "rpi-ap-update.service"
 UPDATE_SCRIPT_PATH = Path("/home/pi/update_ap.sh")
 UPDATE_REF_PATH = Path(os.environ.get("UPDATE_REF_PATH", "/run/rpi_ap_tools_update_ref").strip() or "/run/rpi_ap_tools_update_ref")
@@ -25,6 +31,8 @@ def _env_float(name, default, minimum=1.0):
 
 
 CAPTIVE_PORTAL_ACK_TIMEOUT_SEC = _env_float("CAPTIVE_PORTAL_ACK_TIMEOUT_SEC", 60.0, minimum=5.0)
+CAPTIVE_PORTAL_CAPTURE_TIMEOUT_SEC = _env_float("PORTAL_CAPTURE_TIMEOUT_SEC", 15.0, minimum=1.0)
+CAPTIVE_PORTAL_CAPTURE_MAX_BYTES = int(os.environ.get("PORTAL_CAPTURE_MAX_BYTES", str(1024 * 1024)))
 
 
 def _candidate_update_repo_dirs():
@@ -144,6 +152,65 @@ def portal_preview_command():
     return ""
 
 
+def _load_runtime_status():
+    data = load_json_file(STATUS_PATH, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _save_runtime_status(data):
+    atomic_write_json(STATUS_PATH, data if isinstance(data, dict) else {})
+
+
+def _runtime_portal_target():
+    runtime = _load_runtime_status()
+    probe = runtime.get("probe", {}) if isinstance(runtime, dict) else {}
+    portal = probe.get("portal_capture", {}) if isinstance(probe, dict) else {}
+    requested_url = str(portal.get("requested_url", "")).strip()
+    final_url = str(portal.get("final_url", "")).strip()
+    return requested_url or final_url
+
+
+def portal_capture_available():
+    return bool(CAPTIVE_PORTAL_CAPTURE_URL)
+
+
+def run_portal_capture():
+    if not CAPTIVE_PORTAL_CAPTURE_URL:
+        return False, "No captive portal capture URL configured"
+    runtime = _load_runtime_status()
+    active_wifi = runtime.get("active_wifi", {}) if isinstance(runtime, dict) else {}
+    wifi_name = str(active_wifi.get("name", "")).strip() if isinstance(active_wifi, dict) else ""
+    if not wifi_name or wifi_name == "-":
+        wifi_name = read_active_wifi(WLAN_IFACE).get("name", "-")
+    meta = capture_portal_response(
+        url=CAPTIVE_PORTAL_CAPTURE_URL,
+        timeout_sec=CAPTIVE_PORTAL_CAPTURE_TIMEOUT_SEC,
+        max_bytes=CAPTIVE_PORTAL_CAPTURE_MAX_BYTES,
+        html_path_base=CAPTIVE_PORTAL_CAPTURE_HTML_PATH,
+        wifi_name=wifi_name or "-",
+    )
+    probe = runtime.get("probe", {}) if isinstance(runtime, dict) else {}
+    if not isinstance(probe, dict):
+        probe = {}
+    probe["portal_capture"] = meta
+    probe["last_run"] = time.time()
+    runtime["probe"] = probe
+    if not isinstance(runtime.get("active_wifi"), dict):
+        runtime["active_wifi"] = {"name": wifi_name or "-", "signal": "-"}
+    _save_runtime_status(runtime)
+    parts = [f"Portal capture requested {CAPTIVE_PORTAL_CAPTURE_URL}"]
+    if meta.get("final_url"):
+        parts.append(f"-> {meta['final_url']}")
+    if meta.get("status_code"):
+        parts.append(f"(HTTP {meta['status_code']})")
+    if meta.get("html_path"):
+        parts.append(f"[{meta['html_path']}]")
+    if meta.get("message"):
+        parts.append(str(meta["message"]))
+    ok = bool(meta.get("html_path")) or bool(meta.get("final_url")) or bool(meta.get("ok"))
+    return ok, " ".join(parts)
+
+
 def portal_preview_paths():
     return {
         "image": CAPTIVE_PORTAL_DEBUG_DIR / "before.png",
@@ -198,6 +265,8 @@ def run_portal_preview():
     command = portal_preview_command()
     if not command:
         return False, "No captive portal preview command configured"
+    if not _runtime_portal_target() and CAPTIVE_PORTAL_CAPTURE_URL:
+        run_portal_capture()
     before_updated_at = _portal_preview_updated_at(portal_preview_paths())
     try:
         proc = subprocess.run(command, text=True, capture_output=True, shell=True, check=False, timeout=CAPTIVE_PORTAL_ACK_TIMEOUT_SEC)

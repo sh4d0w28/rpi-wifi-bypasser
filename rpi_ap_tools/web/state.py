@@ -27,7 +27,7 @@ from rpi_ap_tools.web.services.overlay_render_service import (
     start_overlay_renderer_thread,
     start_relay_watchdog_thread,
 )
-from rpi_ap_tools.web.services.update_service import load_portal_preview, load_update_status, portal_ack_available, portal_preview_available, start_update_service
+from rpi_ap_tools.web.services.update_service import load_portal_preview, load_update_status, portal_ack_available, portal_capture_available, portal_preview_available, start_update_service
 from rpi_ap_tools.web.services.weather_service import load_overlay_weather
 from rpi_ap_tools.web.services.wifi_service import WLAN_IFACE, get_active_connection, get_ap_name, get_ip, get_saved_wifi, save_wifi_credentials, scan_wifi, connect_wifi
 
@@ -54,6 +54,7 @@ def index_context():
         "top_wifi": wifi_list[:6],
         "runtime": runtime,
         "portal_ack_available": portal_ack_available(),
+        "portal_capture_available": portal_capture_available(),
         "portal_preview_available": portal_preview_available(),
         "portal_preview": load_portal_preview(),
         "update_status": load_update_status(),

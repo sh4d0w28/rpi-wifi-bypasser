@@ -3,7 +3,7 @@ from pathlib import Path
 from flask import Blueprint, Response, flash, redirect, render_template, request, send_file, url_for
 
 from rpi_ap_tools.web import state
-from rpi_ap_tools.web.services.update_service import load_portal_preview, run_portal_ack, run_portal_preview, start_update_service
+from rpi_ap_tools.web.services.update_service import load_portal_preview, run_portal_ack, run_portal_capture, run_portal_preview, start_update_service
 
 bp = Blueprint("system", __name__)
 
@@ -26,6 +26,13 @@ def wifi_page():
 @bp.post("/portal-ack")
 def portal_ack():
     ok, msg = run_portal_ack()
+    flash(msg, "success" if ok else "error")
+    return redirect(url_for("system.wifi_page"))
+
+
+@bp.post("/portal-capture")
+def portal_capture():
+    ok, msg = run_portal_capture()
     flash(msg, "success" if ok else "error")
     return redirect(url_for("system.wifi_page"))
 

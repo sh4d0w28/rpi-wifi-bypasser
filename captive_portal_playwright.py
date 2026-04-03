@@ -201,6 +201,7 @@ def env_float(name: str, default: float, minimum: float) -> float:
 DEFAULT_STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 DEFAULT_RULES_PATH = Path(os.environ.get("CAPTIVE_PORTAL_RULES_PATH", "/var/lib/rpi_ap_tools/captive_portal_rules.json"))
 DEFAULT_DEBUG_DIR = Path(os.environ.get("CAPTIVE_PORTAL_DEBUG_DIR", "/run/rpi_ap_tools_portal_action"))
+DEFAULT_CAPTURE_URL = os.environ.get("PORTAL_CAPTURE_URL", "http://connectivitycheck.gstatic.com/generate_204").strip()
 DEFAULT_BROWSER_BIN = os.environ.get("CAPTIVE_PORTAL_BROWSER_BIN", "").strip()
 DEFAULT_TIMEOUT_SEC = env_float("CAPTIVE_PORTAL_BROWSER_TIMEOUT_SEC", 45.0, 5.0)
 DEFAULT_SETTLE_SEC = env_float("CAPTIVE_PORTAL_BROWSER_SETTLE_SEC", 6.0, 1.0)
@@ -250,7 +251,7 @@ def current_portal_target(status_path: Path, fallback_url: str, fallback_ssid: s
     html_path = portal.get("html_path") or ""
     requested_url = portal.get("requested_url") or ""
     final_url = portal.get("final_url") or ""
-    url = fallback_url or final_url or requested_url
+    url = fallback_url or final_url or requested_url or DEFAULT_CAPTURE_URL
     ssid = fallback_ssid or portal.get("wifi_name") or active_wifi.get("name") or ""
     return {
         "ssid": ssid.strip(),
