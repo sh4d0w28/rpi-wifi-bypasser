@@ -12,11 +12,36 @@ import urllib.request
 from collections import deque
 from datetime import datetime
 from threading import Event, Lock, Thread
-import sys
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from rpi_ap_tools.core.files import atomic_write_json, atomic_write_text, read_config_value
 from rpi_ap_tools.core.process import run_command
+from rpi_ap_tools.lcd.hardware import (
+    attach_waveshare_device,
+    bind_button_callbacks,
+    button_pressed,
+    get_waveshare_button_device,
+    init_buttons,
+    load_waveshare_modules,
+)
+from rpi_ap_tools.lcd.render_helpers import fit_text, human_bytes, ip_only, metric_color, sanitize_filename_part, signal_color, translate_button_for_rotation
+from rpi_ap_tools.lcd.state import (
+    capture_portal_response,
+    perform_portal_ack,
+    ping_latency_ms,
+    portal_capture_paths,
+    read_active_wifi,
+    read_ap_name,
+    read_ap_password,
+    read_bytes,
+    read_cpu_percent,
+    read_cpu_temp_c,
+    read_ipv4,
+    read_mem_percent,
+    read_nm_connectivity,
+    start_watchers,
+    tcp_latency_ms,
+)
 from rpi_ap_tools.system.network import read_ap_name as resolve_ap_name
 from rpi_ap_tools.system.network import read_ipv4 as resolve_ipv4
 try:
@@ -38,21 +63,7 @@ from youtube_live import (
     start_stream_creation,
 )
 
-WAVESHARE_PATHS = [
-    os.environ.get("WAVESHARE_LCD_PATH", "/home/pi/1.44inch-LCD-HAT-Code/RaspberryPi/python"),
-    "/home/pi/1.44inch-LCD-HAT-Code/RaspberryPi/python",
-]
-for p in WAVESHARE_PATHS:
-    if p and p not in sys.path:
-        sys.path.append(p)
-
-try:
-    import LCD_1in44
-    import config
-except Exception as exc:
-    raise SystemExit(f"LCD library import failed: {exc}")
-
-WAVESHARE_DEV = None
+LCD_1in44, config = load_waveshare_modules()
 BUTTON_STATE_CACHE = {name: False for name in ("UP", "DOWN", "LEFT", "RIGHT", "PRESS", "KEY1", "KEY2", "KEY3")}
 BUTTON_EVENT_QUEUE = deque()
 BUTTON_EVENT_LOCK = Lock()
@@ -122,93 +133,6 @@ def enqueue_button_event(name, is_pressed):
         BUTTON_STATE_CACHE[name] = is_pressed
         BUTTON_EVENT_QUEUE.append((time.time(), name, is_pressed))
 
-def read_ap_name():
-    return resolve_ap_name(HOSTAPD_CONF, AP_CONFIG_FILE, WLAN_AP)
-
-def read_ap_password():
-    return read_config_value(AP_CONFIG_FILE, "AP_PASSWORD", "-")
-
-def read_ipv4(dev):
-    return resolve_ipv4(dev)
-
-def read_active_wifi():
-    proc = run_command(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL", "dev", "wifi", "list", "ifname", WLAN_UP])
-    for line in proc.stdout.splitlines():
-        parts = line.split(":")
-        if len(parts) >= 3 and parts[0] == "*":
-            return {"name": parts[1] or "-", "signal": parts[2] or "-"}
-    return {"name": "-", "signal": "-"}
-
-def read_cpu_temp_c():
-    candidates = [
-        "/sys/class/thermal/thermal_zone0/temp",
-        "/sys/devices/virtual/thermal/thermal_zone0/temp",
-    ]
-    for path in candidates:
-        try:
-            raw = Path(path).read_text().strip()
-            return float(raw) / 1000.0
-        except Exception:
-            continue
-    return None
-
-def read_cpu_percent():
-    try:
-        fields = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0].split()[1:]
-        values = [int(v) for v in fields]
-    except Exception:
-        return None
-
-    total = sum(values)
-    idle = values[3] + (values[4] if len(values) > 4 else 0)
-    CPU_SAMPLES.append((total, idle))
-    if len(CPU_SAMPLES) < 2:
-        return None
-
-    prev_total, prev_idle = CPU_SAMPLES[0]
-    curr_total, curr_idle = CPU_SAMPLES[1]
-    total_diff = curr_total - prev_total
-    idle_diff = curr_idle - prev_idle
-    if total_diff <= 0:
-        return None
-    return max(0.0, min(100.0, 100.0 * (1.0 - (idle_diff / total_diff))))
-
-def read_mem_percent():
-    try:
-        data = {}
-        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
-            key, value = line.split(":", 1)
-            data[key] = int(value.strip().split()[0])
-        total = data.get("MemTotal", 0)
-        available = data.get("MemAvailable", 0)
-        if total <= 0:
-            return None
-        used = total - available
-        return max(0.0, min(100.0, 100.0 * used / total))
-    except Exception:
-        return None
-
-def read_sysfs_int(path):
-    try:
-        return int(Path(path).read_text().strip())
-    except Exception:
-        return 0
-
-def read_bytes(dev):
-    base = Path(f"/sys/class/net/{dev}/statistics")
-    return {"rx": read_sysfs_int(base / "rx_bytes"), "tx": read_sysfs_int(base / "tx_bytes")}
-
-def sanitize_filename_part(value, default="unknown"):
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", (value or "").strip())
-    cleaned = cleaned.strip("._-")
-    return cleaned or default
-
-def portal_capture_paths(wifi_name, captured_at):
-    stamp = datetime.fromtimestamp(captured_at).strftime("%y_%m_%d_%H:%M:%S")
-    safe_wifi = sanitize_filename_part(wifi_name, default="unknown_wifi")
-    html_path = PORTAL_CAPTURE_HTML_PATH.parent / f"{stamp}_{safe_wifi}_portal.html"
-    meta_path = html_path.with_suffix(".json")
-    return html_path, meta_path
 
 def state_signature(state):
     try:
@@ -218,56 +142,6 @@ def state_signature(state):
     except Exception:
         return ""
 
-def human_bytes(n):
-    units = ["B", "KB", "MB", "GB", "TB"]
-    value = float(n)
-    for unit in units:
-        if value < 1024.0 or unit == units[-1]:
-            return f"{value:.1f}{unit}"
-        value /= 1024.0
-
-def ip_only(value):
-    if not value or value == "-":
-        return "-"
-    return value.split("/", 1)[0]
-
-def fit_text(text, max_chars):
-    text = text or "-"
-    if len(text) <= max_chars:
-        return text
-    if max_chars <= 1:
-        return text[:max_chars]
-    return text[: max_chars - 1] + "."
-
-
-def translate_button_for_rotation(name):
-    mapping = {
-        "LEFT": "UP",
-        "RIGHT": "DOWN",
-        "UP": "RIGHT",
-        "DOWN": "LEFT",
-    }
-    return mapping.get(name, name)
-
-def metric_color(value, warn, danger):
-    if value is None:
-        return (180, 180, 180)
-    if value >= danger:
-        return (255, 96, 96)
-    if value >= warn:
-        return (255, 210, 90)
-    return (120, 255, 160)
-
-def signal_color(signal):
-    try:
-        value = int(signal)
-    except Exception:
-        return (180, 180, 180)
-    if value >= 70:
-        return (120, 255, 160)
-    if value >= 40:
-        return (255, 210, 90)
-    return (255, 96, 96)
 
 def draw_label_value(draw, x, y, label, value, value_fill="WHITE", gap=22):
     draw.text((x, y), label, font=FONT, fill=(140, 170, 210))
@@ -576,7 +450,7 @@ def render_busy_overlay(draw, state):
     draw.text((22, 84), fit_text(busy.get("label", "Working"), 14), font=FONT, fill=(140, 220, 140))
 
 def read_button_states():
-    states = {name: button_pressed(name, pin) for name, pin in BUTTON_PINS.items()}
+    states = {name: button_pressed(name, pin, config) for name, pin in BUTTON_PINS.items()}
     with BUTTON_EVENT_LOCK:
         BUTTON_STATE_CACHE.update(states)
     return states
@@ -587,202 +461,6 @@ def drain_button_events():
         BUTTON_EVENT_QUEUE.clear()
     return events
 
-def attach_waveshare_device(lcd):
-    global WAVESHARE_DEV
-    candidates = [
-        lcd,
-        getattr(lcd, "LCD", None),
-        getattr(lcd, "device", None),
-        getattr(lcd, "DEV", None),
-    ]
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        if hasattr(candidate, "digital_read") and hasattr(candidate, "GPIO_KEY_UP_PIN"):
-            WAVESHARE_DEV = candidate
-            return
-        for value in vars(candidate).values() if hasattr(candidate, "__dict__") else []:
-            if hasattr(value, "digital_read") and hasattr(value, "GPIO_KEY_UP_PIN"):
-                WAVESHARE_DEV = value
-                return
-
-def get_waveshare_button_device(name):
-    if WAVESHARE_DEV is None:
-        return None
-    attr_name = "GPIO_KEY_PRESS_PIN" if name == "PRESS" else f"GPIO_KEY_{name}_PIN"
-    return getattr(WAVESHARE_DEV, attr_name, None)
-
-def bind_button_callbacks():
-    global BUTTON_EVENT_MODE
-    if WAVESHARE_DEV is None:
-        return
-    bound_any = False
-    for name in BUTTON_PINS:
-        device = get_waveshare_button_device(name)
-        if device is None:
-            continue
-        try:
-            BUTTON_STATE_CACHE[name] = bool(device.is_active)
-        except Exception:
-            BUTTON_STATE_CACHE[name] = False
-        try:
-            device.when_activated = (lambda _device, button_name=name: enqueue_button_event(button_name, True))
-            device.when_deactivated = (lambda _device, button_name=name: enqueue_button_event(button_name, False))
-            bound_any = True
-        except Exception:
-            continue
-    BUTTON_EVENT_MODE = bound_any
-
-def ping_latency_ms(host):
-    proc = run_command(["ping", "-4", "-c", "1", "-W", "1", host], check=False)
-    if proc.returncode != 0:
-        return None
-    match = re.search(r'time[=<]([\d.]+)\s*ms', proc.stdout)
-    if not match:
-        return None
-    try:
-        return float(match.group(1))
-    except ValueError:
-        return None
-
-def tcp_latency_ms(host, port):
-    start = time.monotonic()
-    try:
-        with socket.create_connection((host, port), timeout=1.5):
-            return (time.monotonic() - start) * 1000.0
-    except OSError:
-        return None
-
-def read_nm_connectivity():
-    proc = run_command(["nmcli", "-t", "networking", "connectivity"], check=False)
-    if proc.returncode != 0:
-        return "unknown"
-    value = proc.stdout.strip().splitlines()
-    return value[0] if value else "unknown"
-
-def perform_portal_ack():
-    if not CAPTIVE_PORTAL_ACK_CMD:
-        return {"ok": False, "message": "No portal ack command configured", "at": time.time()}
-    try:
-        proc = subprocess.run(
-            CAPTIVE_PORTAL_ACK_CMD,
-            text=True,
-            capture_output=True,
-            shell=True,
-            check=False,
-            timeout=20,
-        )
-        message = proc.stdout.strip() or proc.stderr.strip() or "Portal command finished"
-        return {"ok": proc.returncode == 0, "message": message, "at": time.time()}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "message": "Portal command timed out", "at": time.time()}
-    except Exception as exc:
-        return {"ok": False, "message": str(exc), "at": time.time()}
-
-def capture_portal_response(wifi_name="-"):
-    if not PORTAL_CAPTURE_URL:
-        return {"ok": False, "message": "No portal capture URL configured", "captured_at": time.time()}
-
-    captured_at = time.time()
-    html_path, meta_path = portal_capture_paths(wifi_name, captured_at)
-    request = urllib.request.Request(
-        PORTAL_CAPTURE_URL,
-        headers={
-            "User-Agent": "rpi-wifi-bypasser/1.0",
-            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1",
-        },
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=PORTAL_CAPTURE_TIMEOUT_SEC) as response:
-            raw = response.read(PORTAL_CAPTURE_MAX_BYTES + 1)
-            if len(raw) > PORTAL_CAPTURE_MAX_BYTES:
-                raw = raw[:PORTAL_CAPTURE_MAX_BYTES]
-            charset = response.headers.get_content_charset() or "utf-8"
-            body = raw.decode(charset, errors="replace")
-            meta = {
-                "ok": True,
-                "captured_at": captured_at,
-                "requested_url": PORTAL_CAPTURE_URL,
-                "final_url": response.geturl(),
-                "status_code": getattr(response, "status", 200),
-                "content_type": response.headers.get_content_type() if response.headers else "",
-                "content_length": len(raw),
-                "wifi_name": wifi_name,
-                "html_path": str(html_path),
-                "meta_path": str(meta_path),
-            }
-            atomic_write_text(html_path, body)
-            atomic_write_json(meta_path, meta)
-            return meta
-    except urllib.error.HTTPError as exc:
-        raw = exc.read(PORTAL_CAPTURE_MAX_BYTES)
-        charset = exc.headers.get_content_charset() if exc.headers else None
-        body = raw.decode(charset or "utf-8", errors="replace")
-        meta = {
-            "ok": False,
-            "captured_at": captured_at,
-            "requested_url": PORTAL_CAPTURE_URL,
-            "final_url": exc.geturl(),
-            "status_code": exc.code,
-            "content_type": exc.headers.get_content_type() if exc.headers else "",
-            "content_length": len(raw),
-            "wifi_name": wifi_name,
-            "html_path": str(html_path),
-            "meta_path": str(meta_path),
-            "message": str(exc),
-        }
-        atomic_write_text(html_path, body)
-        atomic_write_json(meta_path, meta)
-        return meta
-    except Exception as exc:
-        meta = {
-            "ok": False,
-            "captured_at": captured_at,
-            "requested_url": PORTAL_CAPTURE_URL,
-            "wifi_name": wifi_name,
-            "html_path": str(html_path),
-            "meta_path": str(meta_path),
-            "message": str(exc),
-        }
-        atomic_write_json(meta_path, meta)
-        return meta
-
-def watch_command(cmd, name):
-    while True:
-        proc = None
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-            )
-            logging.info("Started monitor %s: %s", name, " ".join(cmd))
-            for line in proc.stdout:
-                if line.strip():
-                    logging.debug("Monitor %s event: %s", name, line.strip())
-                    request_state_refresh()
-        except Exception as exc:
-            logging.warning("Monitor %s failed: %s", name, exc)
-        finally:
-            if proc is not None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=1)
-                except Exception:
-                    pass
-        time.sleep(2.0)
-
-def start_watchers():
-    commands = [
-        (["ip", "monitor", "address", "dev", WLAN_AP], f"{WLAN_AP}-addr"),
-        (["ip", "monitor", "address", "dev", WLAN_UP], f"{WLAN_UP}-addr"),
-        (["nmcli", "monitor"], "nmcli"),
-    ]
-    for cmd, name in commands:
-        Thread(target=watch_command, args=(cmd, name), daemon=True).start()
 
 def render_overview(draw, state):
     rows = [
@@ -1110,30 +788,13 @@ def render_screen(lcd, state):
 
     lcd.LCD_ShowImage(image.rotate(90), 0, 0)
 
-def button_pressed(name, pin):
-    try:
-        if hasattr(config, "digital_read"):
-            return config.digital_read(pin) == 0
-        pin_attr = get_waveshare_button_device(name)
-        if pin_attr is None:
-            return False
-        return WAVESHARE_DEV.digital_read(pin_attr) == 0
-    except Exception:
-        return False
-
-def init_buttons():
-    try:
-        if hasattr(config, "module_init"):
-            config.module_init()
-    except Exception:
-        pass
-
 def main():
-    init_buttons()
-    start_watchers()
+    init_buttons(config)
+    start_watchers(WLAN_AP, WLAN_UP, request_state_refresh)
     lcd = LCD_1in44.LCD()
     attach_waveshare_device(lcd)
-    bind_button_callbacks()
+    global BUTTON_EVENT_MODE
+    BUTTON_EVENT_MODE = bind_button_callbacks(BUTTON_PINS, BUTTON_STATE_CACHE, enqueue_button_event)
     lcd.LCD_Init(LCD_1in44.SCAN_DIR_DFT)
     try:
         lcd.LCD_Clear()
@@ -1143,13 +804,13 @@ def main():
     prev_t = time.time()
     curr = prev
     button_states_prev = {name: False for name in BUTTON_PINS}
-    ap_name = read_ap_name()
-    ap_password = read_ap_password()
+    ap_name = read_ap_name(HOSTAPD_CONF, AP_CONFIG_FILE, WLAN_AP)
+    ap_password = read_ap_password(AP_CONFIG_FILE)
     w0 = ip_only(read_ipv4(WLAN_AP))
     w1 = ip_only(read_ipv4(WLAN_UP))
-    active_wifi = read_active_wifi()
+    active_wifi = read_active_wifi(WLAN_UP)
     cpu_temp = read_cpu_temp_c()
-    cpu_pct = read_cpu_percent()
+    cpu_pct = read_cpu_percent(CPU_SAMPLES)
     mem_pct = read_mem_percent()
     rx1ps = 0.0
     tx1ps = 0.0
@@ -1886,7 +1547,7 @@ def main():
                 curr = {WLAN_AP: read_bytes(WLAN_AP), WLAN_UP: read_bytes(WLAN_UP)}
                 dt = max(0.2, now - prev_t)
                 next_cpu_temp = read_cpu_temp_c()
-                next_cpu_pct = read_cpu_percent()
+                next_cpu_pct = read_cpu_percent(CPU_SAMPLES)
                 next_mem_pct = read_mem_percent()
                 next_rx1ps = max(0, (curr[WLAN_UP]["rx"] - prev[WLAN_UP]["rx"]) / dt)
                 next_tx1ps = max(0, (curr[WLAN_UP]["tx"] - prev[WLAN_UP]["tx"]) / dt)
@@ -1901,11 +1562,11 @@ def main():
                 did_work = True
 
             if STATE_REFRESH_EVENT.is_set() or (now - last_network_refresh_at >= NETWORK_FALLBACK_REFRESH_SEC):
-                next_ap_name = read_ap_name()
-                next_ap_password = read_ap_password()
+                next_ap_name = read_ap_name(HOSTAPD_CONF, AP_CONFIG_FILE, WLAN_AP)
+                next_ap_password = read_ap_password(AP_CONFIG_FILE)
                 next_w0 = ip_only(read_ipv4(WLAN_AP))
                 next_w1 = ip_only(read_ipv4(WLAN_UP))
-                next_active_wifi = read_active_wifi()
+                next_active_wifi = read_active_wifi(WLAN_UP)
                 next_ap_ok = next_ap_name != "unknown" and next_w0 != "-"
                 next_cl_ok = next_active_wifi["name"] != "-" and next_w1 != "-"
                 next_signal = next_active_wifi["signal"] if next_cl_ok else "-"
@@ -1941,7 +1602,13 @@ def main():
             if auth_required:
                 with state_lock:
                     wifi_name = active_wifi.get("name", "-")
-                portal_capture = capture_portal_response(wifi_name)
+                portal_capture = capture_portal_response(
+                    url=PORTAL_CAPTURE_URL,
+                    timeout_sec=PORTAL_CAPTURE_TIMEOUT_SEC,
+                    max_bytes=PORTAL_CAPTURE_MAX_BYTES,
+                    html_path_base=PORTAL_CAPTURE_HTML_PATH,
+                    wifi_name=wifi_name,
+                )
             next_probe = {
                 "last_run": now,
                 "youtube_ping_ms": ping_latency_ms(YOUTUBE_PING_HOST),
