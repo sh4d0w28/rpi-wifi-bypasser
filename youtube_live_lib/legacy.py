@@ -28,6 +28,12 @@ from .auth_service import (
     start_device_authorization as auth_start_device_authorization,
     validate_live_access as auth_validate_live_access,
 )
+from .creation_service import (
+    create_stream_bundle as service_create_stream_bundle,
+    creation_in_progress as service_creation_in_progress,
+    run_creation_job as service_run_creation_job,
+    start_stream_creation as service_start_stream_creation,
+)
 from .config import (
     CLIENT_CONFIG_PATH,
     CREATION_LOG_PATH,
@@ -87,6 +93,14 @@ from .modes import (
     normalize_fps_mode,
     normalize_rotation_mode,
     rotation_mode_spec,
+)
+from .relay_runtime import (
+    _run_overlay_feed as runtime_run_overlay_feed,
+    ensure_proxy_relay_running as runtime_ensure_proxy_relay_running,
+    refresh_proxy_overlay as runtime_refresh_proxy_overlay,
+    set_proxy_audio_mode as runtime_set_proxy_audio_mode,
+    set_proxy_fps_mode as runtime_set_proxy_fps_mode,
+    set_proxy_rotation_mode as runtime_set_proxy_rotation_mode,
 )
 from .storage import (
     clear_creation_state as storage_clear_creation_state,
@@ -1556,8 +1570,64 @@ def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None
 
 
 def creation_in_progress():
-    state = load_creation_state()
-    return state.get("status") == "creating"
+    return service_creation_in_progress()
+
+
+def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
+    return service_create_stream_bundle(
+        api_request_fn=_api_request,
+        ap_ip=ap_ip,
+        title=title,
+        rotation=rotation,
+        fps_mode=fps_mode,
+        audio_mode=audio_mode,
+    )
+
+
+def _run_creation_job(ap_ip, title, rotation, fps_mode, audio_mode):
+    return service_run_creation_job(
+        api_request_fn=_api_request,
+        ap_ip=ap_ip,
+        title=title,
+        rotation=rotation,
+        fps_mode=fps_mode,
+        audio_mode=audio_mode,
+    )
+
+
+def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
+    return service_start_stream_creation(
+        validate_live_access_fn=validate_live_access,
+        ap_ip=ap_ip,
+        title=title,
+        rotation=rotation,
+        fps_mode=fps_mode,
+        audio_mode=audio_mode,
+    )
+
+
+def ensure_proxy_relay_running():
+    return runtime_ensure_proxy_relay_running()
+
+
+def refresh_proxy_overlay():
+    return runtime_refresh_proxy_overlay()
+
+
+def set_proxy_audio_mode(mode):
+    return runtime_set_proxy_audio_mode(mode)
+
+
+def set_proxy_rotation_mode(mode):
+    return runtime_set_proxy_rotation_mode(mode)
+
+
+def set_proxy_fps_mode(mode):
+    return runtime_set_proxy_fps_mode(mode)
+
+
+def _run_overlay_feed(png_path, interval):
+    return runtime_run_overlay_feed(png_path, interval)
 
 
 def qr_data_uri(payload):
