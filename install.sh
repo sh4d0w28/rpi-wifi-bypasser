@@ -12,7 +12,7 @@ WLAN0_IFACE=${WLAN0_IFACE:-wlan0}
 WLAN1_IFACE=${WLAN1_IFACE:-wlan1}
 
 sudo mkdir -p "$INSTALL_DIR"
-sudo cp -r web_ui.py lcd_status.py youtube_live.py youtube_live_lib configure_shared_egress.sh configure_ap.sh update_ap.sh captive_portal_playwright.py templates systemd "$INSTALL_DIR"/
+sudo cp -r web_ui.py lcd_status.py youtube_live.py rpi_ap_tools youtube_live_lib configure_shared_egress.sh configure_ap.sh update_ap.sh captive_portal_playwright.py templates systemd "$INSTALL_DIR"/
 sudo chmod +x "$INSTALL_DIR"/web_ui.py
 sudo chmod +x "$INSTALL_DIR"/lcd_status.py
 sudo chmod +x "$INSTALL_DIR"/youtube_live.py
