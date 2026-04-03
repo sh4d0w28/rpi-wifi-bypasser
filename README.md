@@ -1,5 +1,26 @@
 # Raspberry Pi AP tools bundle v2 (Waveshare 1.44inch LCD HAT)
 
+## Refactor Progress
+
+- Active local branch: `refactor`
+- Workflow rule: milestone commits are local only during the refactor; nothing has been pushed from this branch yet
+- Stable entrypoints during the refactor:
+  - `youtube_live.py`
+  - `web_ui.py`
+  - `lcd_status.py`
+- Completed milestones:
+  - `077c5a0` `refactor: extract shared core and system helpers`
+  - `7954637` `refactor: split youtube live config and mode helpers`
+  - `70d889f` `refactor: split youtube live state storage`
+  - `7ac568b` `refactor: move youtube auth and api logic out of legacy`
+- Remaining milestones:
+  - relay and overlay runtime split
+  - stream creation workflow split
+  - web UI modularization
+  - LCD/status modularization
+  - final cleanup
+  - each of the milestones above will be committed locally as its own checkpoint
+
 Changes in this version:
 - Web UI is split into tabs:
   - `Wi-Fi`
