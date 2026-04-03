@@ -18,6 +18,16 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .auth_service import (
+    client_ready as auth_client_ready,
+    ensure_access_token as auth_ensure_access_token,
+    get_auth_status as auth_get_auth_status,
+    make_api_request,
+    poll_device_authorization as auth_poll_device_authorization,
+    refresh_access_token as auth_refresh_access_token,
+    start_device_authorization as auth_start_device_authorization,
+    validate_live_access as auth_validate_live_access,
+)
 from .config import (
     CLIENT_CONFIG_PATH,
     CREATION_LOG_PATH,
@@ -59,6 +69,7 @@ from .config import (
     ZMQ_REQ,
     ZMQ_SNDTIMEO,
 )
+from .errors import YouTubeLiveError
 from .modes import (
     AUDIO_MODE_SPECS,
     FPS_MODE_SPECS,
@@ -109,6 +120,7 @@ from .storage import (
     save_token as storage_save_token,
     update_creation_state as storage_update_creation_state,
 )
+from .youtube_api import api_request as youtube_api_request, http_form, http_json
 
 try:
     import fcntl
@@ -129,10 +141,6 @@ FFMPEG_BITRATE_RE = re.compile(r'bitrate=\s*([0-9.]+)\s*kbits/s')
 FFMPEG_SPEED_RE = re.compile(r'speed=\s*([0-9.]+)x')
 FFMPEG_ENCODER_RE = re.compile(r'^\s*[A-Z\.]+\s+([^\s]+)\s+', re.MULTILINE)
 _ENCODER_CACHE = None
-
-
-class YouTubeLiveError(RuntimeError):
-    pass
 
 
 def _decorate_audio_mode_fields(state, *, default_mode=None):
@@ -197,48 +205,11 @@ def ensure_overlay_html_exists():
 
 
 def _http_json(url, *, method="GET", headers=None, data=None):
-    request = urllib.request.Request(url, method=method)
-    for key, value in (headers or {}).items():
-        request.add_header(key, value)
-    if data is not None:
-        encoded = json.dumps(data).encode("utf-8")
-        request.add_header("Content-Type", "application/json")
-    else:
-        encoded = None
-    try:
-        with urllib.request.urlopen(request, data=encoded, timeout=20) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="ignore")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"error": {"message": raw or str(exc)}}
-        message = payload.get("error", {}).get("message") or str(exc)
-        raise YouTubeLiveError(message) from exc
-    except urllib.error.URLError as exc:
-        raise YouTubeLiveError(str(exc.reason)) from exc
+    return http_json(url, method=method, headers=headers, data=data)
 
 
 def _http_form(url, fields):
-    encoded = urllib.parse.urlencode(fields).encode("utf-8")
-    request = urllib.request.Request(url, data=encoded, method="POST")
-    request.add_header("Content-Type", "application/x-www-form-urlencoded")
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="ignore")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"error": raw or str(exc)}
-        message = payload.get("error_description") or payload.get("error") or str(exc)
-        raise YouTubeLiveError(message) from exc
-    except urllib.error.URLError as exc:
-        raise YouTubeLiveError(str(exc.reason)) from exc
+    return http_form(url, fields)
 
 
 def _normalize_client_config(data):
@@ -613,191 +584,70 @@ def _unlock_creation(fd):
 
 
 def client_ready():
-    return bool(load_client_config().get("client_id"))
+    return auth_client_ready(load_client_config_fn=load_client_config)
 
 
 def authorization_ready():
-    token = load_token()
-    return bool(token.get("refresh_token") or token.get("access_token"))
+    return bool(load_token().get("refresh_token") or load_token().get("access_token"))
 
 
 def validate_live_access():
-    if not authorization_ready():
-        return {
-            "ok": False,
-            "code": "not_authorized",
-            "message": "YouTube is not authorized yet",
-        }
-
-    try:
-        payload = _api_request(
-            "GET",
-            "liveBroadcasts",
-            params={
-                "part": "id,status",
-                "broadcastStatus": "all",
-                "maxResults": 1,
-            },
-        )
-        items = payload.get("items", [])
-        return {
-            "ok": True,
-            "code": "ok",
-            "message": "YouTube Live access verified",
-            "checked_at": time.time(),
-            "broadcast_count_hint": len(items),
-        }
-    except YouTubeLiveError as exc:
-        message = str(exc).strip() or "YouTube Live validation failed"
-        lowered = message.lower()
-        code = "api_error"
-        if "not authorized" in lowered or "unauthorized" in lowered:
-            code = "not_authorized"
-        elif "refresh token" in lowered or "invalid_grant" in lowered:
-            code = "token_expired"
-        elif "insufficient" in lowered or "scope" in lowered:
-            code = "scope_error"
-        elif "live streaming" in lowered or "live broadcast" in lowered:
-            code = "live_not_enabled"
-        return {
-            "ok": False,
-            "code": code,
-            "message": message,
-            "checked_at": time.time(),
-        }
+    return auth_validate_live_access(
+        authorization_ready_fn=authorization_ready,
+        api_request_fn=_api_request,
+    )
 
 
 def get_auth_status():
-    token = load_token()
-    device = load_device_state()
-    validation = {
-        "ok": False,
-        "code": "not_checked",
-        "message": "Authorization has not been verified yet",
-    }
-    if authorization_ready():
-        validation = validate_live_access()
-    return {
-        "client_configured": client_ready(),
-        "authorized": authorization_ready(),
-        "device_pending": bool(device.get("device_code")),
-        "device": device,
-        "token": {
-            "has_refresh_token": bool(token.get("refresh_token")),
-            "expires_at": token.get("expires_at"),
-        },
-        "validation": validation,
-        "creation": load_creation_state(),
-    }
+    return auth_get_auth_status(
+        load_token_fn=load_token,
+        load_device_state_fn=load_device_state,
+        client_ready_fn=client_ready,
+        authorization_ready_fn=authorization_ready,
+        validate_live_access_fn=validate_live_access,
+        load_creation_state_fn=load_creation_state,
+    )
 
 
 def start_device_authorization():
-    config = load_client_config()
-    if not config.get("client_id"):
-        raise YouTubeLiveError(f"Missing YouTube OAuth client config at {CLIENT_CONFIG_PATH}")
-    payload = _http_form(
-        DEVICE_CODE_URL,
-        {
-            "client_id": config["client_id"],
-            "scope": YOUTUBE_SCOPE,
-        },
+    return auth_start_device_authorization(
+        load_client_config_fn=load_client_config,
+        save_device_state_fn=save_device_state,
     )
-    state = {
-        "device_code": payload.get("device_code", ""),
-        "user_code": payload.get("user_code", ""),
-        "verification_url": payload.get("verification_url", ""),
-        "verification_url_complete": payload.get("verification_url_complete", ""),
-        "expires_at": time.time() + int(payload.get("expires_in", 0)),
-        "interval": int(payload.get("interval", 5)),
-        "started_at": time.time(),
-    }
-    save_device_state(state)
-    return state
 
 
 def poll_device_authorization():
-    config = load_client_config()
-    state = load_device_state()
-    if not config.get("client_id"):
-        raise YouTubeLiveError(f"Missing YouTube OAuth client config at {CLIENT_CONFIG_PATH}")
-    if not state.get("device_code"):
-        raise YouTubeLiveError("No device authorization is pending")
-    if state.get("expires_at", 0) <= time.time():
-        clear_device_state()
-        raise YouTubeLiveError("Device authorization code expired")
-
-    fields = {
-        "client_id": config["client_id"],
-        "device_code": state["device_code"],
-        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-    }
-    if config.get("client_secret"):
-        fields["client_secret"] = config["client_secret"]
-    try:
-        payload = _http_form(TOKEN_URL, fields)
-    except YouTubeLiveError as exc:
-        message = str(exc)
-        if any(code in message for code in ("authorization_pending", "slow_down")):
-            raise
-        clear_device_state()
-        raise
-
-    token = {
-        "access_token": payload.get("access_token", ""),
-        "refresh_token": payload.get("refresh_token", load_token().get("refresh_token", "")),
-        "scope": payload.get("scope", YOUTUBE_SCOPE),
-        "token_type": payload.get("token_type", "Bearer"),
-        "expires_at": time.time() + int(payload.get("expires_in", 3600)) - 60,
-    }
-    save_token(token)
-    clear_device_state()
-    return token
+    return auth_poll_device_authorization(
+        load_client_config_fn=load_client_config,
+        load_device_state_fn=load_device_state,
+        clear_device_state_fn=clear_device_state,
+        load_token_fn=load_token,
+        save_token_fn=save_token,
+    )
 
 
 def _refresh_access_token(token):
-    config = load_client_config()
-    if not config.get("client_id"):
-        raise YouTubeLiveError(f"Missing YouTube OAuth client config at {CLIENT_CONFIG_PATH}")
-    if not token.get("refresh_token"):
-        raise YouTubeLiveError("No YouTube refresh token available")
-    fields = {
-        "client_id": config["client_id"],
-        "refresh_token": token["refresh_token"],
-        "grant_type": "refresh_token",
-    }
-    if config.get("client_secret"):
-        fields["client_secret"] = config["client_secret"]
-    payload = _http_form(TOKEN_URL, fields)
-    token["access_token"] = payload.get("access_token", "")
-    token["token_type"] = payload.get("token_type", "Bearer")
-    token["expires_at"] = time.time() + int(payload.get("expires_in", 3600)) - 60
-    save_token(token)
-    return token
+    return auth_refresh_access_token(
+        token=token,
+        load_client_config_fn=load_client_config,
+        save_token_fn=save_token,
+    )
 
 
 def ensure_access_token():
-    token = load_token()
-    if not token:
-        raise YouTubeLiveError("YouTube is not authorized yet")
-    if token.get("access_token") and token.get("expires_at", 0) > time.time():
-        return token["access_token"]
-    token = _refresh_access_token(token)
-    if not token.get("access_token"):
-        raise YouTubeLiveError("Failed to refresh YouTube access token")
-    return token["access_token"]
+    return auth_ensure_access_token(
+        load_token_fn=load_token,
+        refresh_access_token_fn=_refresh_access_token,
+    )
 
 
 def _api_request(method, path, *, params=None, body=None):
-    access_token = ensure_access_token()
-    query = urllib.parse.urlencode(params or {})
-    url = f"{YOUTUBE_API_BASE}/{path}"
-    if query:
-        url = f"{url}?{query}"
-    return _http_json(
-        url,
-        method=method,
-        headers={"Authorization": f"Bearer {access_token}"},
-        data=body,
+    return youtube_api_request(
+        method,
+        path,
+        ensure_access_token_fn=ensure_access_token,
+        params=params,
+        body=body,
     )
 
 
