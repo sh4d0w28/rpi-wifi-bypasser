@@ -10,6 +10,7 @@ from flask import Response, render_template_string, send_file
 
 from rpi_ap_tools.core.files import load_json_file
 from youtube_live import DEFAULT_OVERLAY_HTML, YouTubeLiveError, ensure_overlay_html_exists, ensure_proxy_relay_running, load_overlay_state, refresh_proxy_overlay, save_overlay_state
+from youtube_live_lib.storage import write_transparent_overlay_png
 
 from .weather_service import load_overlay_weather
 from .wifi_service import WLAN_IFACE, get_active_connection, get_ap_name, get_ip
@@ -77,9 +78,14 @@ def _overlay_renderer_bin():
 def render_overlay_png(force=False):
     with OVERLAY_RENDER_LOCK:
         overlay = load_overlay_state()
+        png_path = Path(overlay["png_path"])
+        if not overlay.get("enabled"):
+            write_transparent_overlay_png(png_path)
+            overlay["last_render_error"] = ""
+            overlay["last_rendered_at"] = time.time()
+            save_overlay_state(overlay)
+            return True, f"Overlay hidden with transparent frame at {png_path}"
         html_source = load_overlay_html()
-        if not overlay.get("enabled") and not force:
-            return False, "Overlay disabled"
         renderer_bin = _overlay_renderer_bin()
         if not renderer_bin:
             overlay["last_render_error"] = "No Chromium-compatible browser found"
@@ -88,7 +94,6 @@ def render_overlay_png(force=False):
         rendered_html = render_template_string(html_source, **overlay_template_context())
         OVERLAY_RENDER_HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
         OVERLAY_RENDER_HTML_PATH.write_text(rendered_html, encoding="utf-8")
-        png_path = Path(overlay["png_path"])
         png_path.parent.mkdir(parents=True, exist_ok=True)
         cmd = [renderer_bin, "--headless", "--disable-gpu", "--disable-dev-shm-usage", "--hide-scrollbars", "--default-background-color=00000000", f"--window-size={overlay['width']},{overlay['height']}", f"--screenshot={png_path}", OVERLAY_RENDER_HTML_PATH.as_uri()]
         if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -112,6 +117,8 @@ def _overlay_renderer_loop(app):
             refresh_sec = max(5, int(overlay.get("refresh_sec") or 10))
             last_rendered_at = float(overlay.get("last_rendered_at") or 0)
             if overlay.get("enabled") and time.time() - last_rendered_at >= refresh_sec:
+                render_overlay_png(force=True)
+            elif not overlay.get("enabled") and not Path(overlay["png_path"]).is_file():
                 render_overlay_png(force=True)
             time.sleep(1.0)
 

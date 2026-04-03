@@ -1,4 +1,4 @@
-from flask import Blueprint, Response, flash, redirect, request, url_for
+from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
 
 from youtube_live import YouTubeLiveError
 
@@ -7,6 +7,11 @@ from rpi_ap_tools.web.services.overlay_render_service import load_runtime_status
 from rpi_ap_tools.web.services.wifi_service import get_ip
 
 bp = Blueprint("youtube", __name__)
+
+
+@bp.get("/stream", endpoint="stream_page")
+def stream_page():
+    return render_template("index.html", current_page="stream", **state.index_context())
 
 
 @bp.post("/youtube/device/start")
@@ -19,7 +24,7 @@ def youtube_device_start():
         )
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
-    return redirect(url_for("index"))
+    return redirect(url_for("youtube.stream_page"))
 
 
 @bp.post("/youtube/device/poll")
@@ -29,7 +34,7 @@ def youtube_device_poll():
         flash("YouTube authorization completed.", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
-    return redirect(url_for("index"))
+    return redirect(url_for("youtube.stream_page"))
 
 
 @bp.post("/youtube/create")
@@ -44,13 +49,13 @@ def youtube_create():
     auth = state.get_auth_status()
     if probe.get("auth_required") or not auth.get("authorized"):
         flash("AUTH FIRST", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("youtube.stream_page"))
     try:
         state.start_stream_creation(ap_ip=ap_ip, title=title, audio_mode=audio_mode, rotation=rotation, fps_mode=fps_mode)
         flash("YouTube stream creation started.", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
-    return redirect(url_for("index"))
+    return redirect(url_for("youtube.stream_page"))
 
 
 @bp.post("/youtube/audio-mode")
@@ -61,7 +66,7 @@ def youtube_audio_mode():
         flash(f"YouTube relay audio mode: {relay_state.get('audio_mode_label', 'Normal')}", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
-    return redirect(url_for("index"))
+    return redirect(url_for("youtube.stream_page"))
 
 
 @bp.post("/youtube/rotation")
@@ -72,7 +77,7 @@ def youtube_rotation_mode():
         flash(f"YouTube relay rotation: {relay_state.get('rotation_label', 'Off')} (relay reconnects briefly).", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
-    return redirect(url_for("index"))
+    return redirect(url_for("youtube.stream_page"))
 
 
 @bp.post("/youtube/fps-mode")
@@ -83,7 +88,7 @@ def youtube_fps_mode():
         flash(f"YouTube relay FPS: {relay_state.get('fps_mode_label', 'Original')} (relay reconnects briefly).", "success")
     except YouTubeLiveError as exc:
         flash(str(exc), "error")
-    return redirect(url_for("index"))
+    return redirect(url_for("youtube.stream_page"))
 
 
 @bp.get("/youtube/creation-log")

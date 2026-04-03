@@ -22,6 +22,11 @@ from .config import (
 )
 from .modes import decorate_stream_state, normalize_audio_mode, normalize_fps_mode, normalize_rotation_mode
 
+TRANSPARENT_OVERLAY_PNG_BYTES = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000b49444154789c6360000200000500017a5eab3f0000000049454e44ae426082"
+)
+
 
 def load_json(path, default):
     if not path.exists():
@@ -73,6 +78,26 @@ def coerce_float(value, default, minimum=None, maximum=None):
     if maximum is not None:
         number = min(maximum, number)
     return number
+
+
+def write_transparent_overlay_png(path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(TRANSPARENT_OVERLAY_PNG_BYTES)
+    return path
+
+
+def ensure_overlay_png_exists(state=None):
+    overlay = normalize_overlay_state(load_json(OVERLAY_STATE_PATH, {}) if state is None else state)
+    path = Path(overlay["png_path"])
+    if not overlay.get("enabled"):
+        return write_transparent_overlay_png(path)
+    try:
+        if path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"):
+            return path
+    except OSError:
+        pass
+    return write_transparent_overlay_png(path)
 
 
 def default_overlay_state():

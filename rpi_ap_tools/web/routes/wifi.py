@@ -13,18 +13,18 @@ def connect():
     auth_type = request.form.get("auth_type", "wpa-psk").strip()
     if not ssid:
         flash("SSID is required", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("system.wifi_page"))
     saved = wifi_service.get_saved_wifi(ssid)
     if auth_type != "open" and not password and saved.get("password"):
         password = saved["password"]
     if auth_type != "open" and not password:
         flash("Password is required for secured Wi-Fi", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("system.wifi_page"))
     ok, msg = wifi_service.connect_wifi(ssid, password, auth_type)
     if ok:
         wifi_service.save_wifi_credentials(ssid, "" if auth_type == "open" else password, auth_type)
     flash(msg, "success" if ok else "error")
-    return redirect(url_for("index"))
+    return redirect(url_for("system.wifi_page"))
 
 
 @bp.post("/disconnect")
@@ -35,4 +35,4 @@ def disconnect():
         flash(proc.stdout.strip() or proc.stderr.strip() or "Disconnected", "success" if proc.returncode == 0 else "error")
     else:
         flash("No active wlan1 connection", "error")
-    return redirect(url_for("index"))
+    return redirect(url_for("system.wifi_page"))

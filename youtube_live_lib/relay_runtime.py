@@ -53,6 +53,7 @@ from .modes import (
 from .storage import (
     clear_relay_state,
     coerce_float as _coerce_float,
+    ensure_overlay_png_exists,
     load_overlay_state,
     load_relay_state as storage_load_relay_state,
     load_stream_state as storage_load_stream_state,
@@ -351,7 +352,7 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode,
     fps_mode = normalize_fps_mode(fps_mode)
     fps_spec = fps_mode_spec(fps_mode)
     overlay = normalize_overlay_state(overlay or {})
-    overlay_active = bool(overlay.get("enabled") and overlay_fd is not None and overlay.get("png_path"))
+    overlay_active = bool(overlay_fd is not None and overlay.get("png_path"))
     argv = [FFMPEG_BIN, "-hide_banner", "-loglevel", "info", "-stats", "-listen", "1", "-i", listen_url]
     if overlay_active:
         argv.extend(["-thread_queue_size", "8", "-f", "image2pipe", "-framerate", "1", "-c:v", "png", "-i", f"pipe:{overlay_fd}"])
@@ -397,7 +398,7 @@ def _proxy_video_pipeline_state(rotation, fps_mode, overlay=None):
     rotation = normalize_rotation_mode(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
     overlay = normalize_overlay_state(overlay or load_overlay_state())
-    if rotation == "0" and fps_mode == "original" and not overlay.get("enabled"):
+    if rotation == "0" and fps_mode == "original" and not overlay.get("png_path"):
         return {"mode": "copy-video-live-audio", "video_encoder": "copy", "video_encoder_kind": "copy", "video_encoder_label": "Passthrough"}
     encoder = _resolve_proxy_video_encoder()
     return {
@@ -605,10 +606,11 @@ def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_m
     rotation = normalize_rotation_mode(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
     overlay = normalize_overlay_state(overlay or load_overlay_state())
-    overlay_active = bool(overlay.get("enabled") and overlay.get("png_path"))
+    overlay_active = bool(overlay.get("png_path"))
     overlay_feed = None
     overlay_fd = None
     if overlay_active:
+        ensure_overlay_png_exists(overlay)
         overlay_feed = _start_overlay_feed(overlay["png_path"])
         if overlay_feed.stdout is not None:
             overlay_fd = overlay_feed.stdout.fileno()
@@ -671,7 +673,7 @@ def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_m
             "rotation": rotation,
             "fps_mode": fps_mode,
             "overlay": overlay,
-            "overlay_enabled": overlay_active,
+            "overlay_enabled": bool(overlay.get("enabled")),
             "overlay_feed_pid": overlay_feed.pid if overlay_feed else 0,
         },
         default_audio_mode=audio_mode,
