@@ -43,6 +43,7 @@ def _candidate_update_repo_dirs():
     yield UPDATE_SCRIPT_PATH.parent
     yield Path("/home/pi/rpi_ap_tools_waveshare_bundle")
     yield Path("/home/pi/rpi_ap_tools_waveshare")
+    yield Path("/home/pi/rpi-wifi-bypasser")
 
 
 def _default_update_repo_dir():

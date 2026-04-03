@@ -5,6 +5,7 @@ INSTALL_DIR=/opt/rpi_ap_tools
 WIFI_DB_PATH=${WIFI_DB_PATH:-/etc/rpi_ap_tools_wifi_db.json}
 AP_CONFIG_FILE=${AP_CONFIG_FILE:-/etc/default/rpi_ap_tools_ap}
 PORTAL_ENV_FILE=${PORTAL_ENV_FILE:-/etc/default/rpi_ap_tools_portal}
+UPDATE_ENV_FILE=${UPDATE_ENV_FILE:-/etc/default/rpi_ap_tools_update}
 PORTAL_ACK_PYTHON=${PORTAL_ACK_PYTHON:-$INSTALL_DIR/.venv/bin/python}
 YOUTUBE_CLIENT_CONFIG_PATH=${YOUTUBE_CLIENT_CONFIG_PATH:-/etc/rpi_ap_tools_youtube_client.json}
 YOUTUBE_TOKEN_PATH=${YOUTUBE_TOKEN_PATH:-/var/lib/rpi_ap_tools/youtube_token.json}
@@ -12,6 +13,7 @@ YOUTUBE_STREAM_STATE_PATH=${YOUTUBE_STREAM_STATE_PATH:-/var/lib/rpi_ap_tools/you
 APP_STATE_DIR=/var/lib/rpi_ap_tools
 WLAN0_IFACE=${WLAN0_IFACE:-wlan0}
 WLAN1_IFACE=${WLAN1_IFACE:-wlan1}
+SOURCE_REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 sudo mkdir -p "$INSTALL_DIR"
 sudo cp -r web_ui.py lcd_status.py youtube_live.py rpi_ap_tools youtube_live_lib configure_shared_egress.sh configure_ap.sh update_ap.sh captive_portal_playwright.py templates systemd "$INSTALL_DIR"/
@@ -90,6 +92,18 @@ if [ -x "$PORTAL_ACK_PYTHON" ]; then
   append_env_if_missing "$PORTAL_ENV_FILE" CAPTIVE_PORTAL_ACK_CMD "$PORTAL_ACK_PYTHON $INSTALL_DIR/captive_portal_playwright.py"
 fi
 sudo chmod 600 "$PORTAL_ENV_FILE" || true
+
+# Preserve updater environment across reinstalls/upgrades.
+sudo mkdir -p "$(dirname "$UPDATE_ENV_FILE")"
+if [ ! -f "$UPDATE_ENV_FILE" ]; then
+  sudo sh -c "cat > '$UPDATE_ENV_FILE' <<'EOF'
+# Environment for the background updater
+EOF"
+fi
+if [ -d "$SOURCE_REPO_DIR/.git" ]; then
+  append_env_if_missing "$UPDATE_ENV_FILE" UPDATE_REPO_DIR "$SOURCE_REPO_DIR"
+fi
+sudo chmod 600 "$UPDATE_ENV_FILE" || true
 
 # App config and persistent secret/state directories.
 sudo mkdir -p "$(dirname "$YOUTUBE_CLIENT_CONFIG_PATH")"
@@ -170,6 +184,7 @@ echo "Prepared files:"
 echo "  Wi-Fi DB: $WIFI_DB_PATH"
 echo "  AP config: $AP_CONFIG_FILE"
 echo "  Portal env: $PORTAL_ENV_FILE"
+echo "  Update env: $UPDATE_ENV_FILE"
 if [ -x "$PORTAL_ACK_PYTHON" ]; then
   echo "  Portal helper: $PORTAL_ACK_PYTHON $INSTALL_DIR/captive_portal_playwright.py"
 fi

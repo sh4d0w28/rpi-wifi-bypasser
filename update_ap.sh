@@ -7,6 +7,8 @@ if [ ! -d "$DEFAULT_REPO_DIR/.git" ] && [ -d /home/pi/rpi_ap_tools_waveshare_bun
   DEFAULT_REPO_DIR=/home/pi/rpi_ap_tools_waveshare_bundle
 elif [ ! -d "$DEFAULT_REPO_DIR/.git" ] && [ -d /home/pi/rpi_ap_tools_waveshare/.git ]; then
   DEFAULT_REPO_DIR=/home/pi/rpi_ap_tools_waveshare
+elif [ ! -d "$DEFAULT_REPO_DIR/.git" ] && [ -d /home/pi/rpi-wifi-bypasser/.git ]; then
+  DEFAULT_REPO_DIR=/home/pi/rpi-wifi-bypasser
 fi
 
 REPO_DIR=${REPO_DIR:-$DEFAULT_REPO_DIR}
