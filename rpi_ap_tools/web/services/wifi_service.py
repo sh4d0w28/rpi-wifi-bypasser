@@ -134,7 +134,7 @@ def connect_wifi(ssid, password, auth_type):
         ["nmcli", "connection", "modify", profile_name, "ipv6.method", "auto"],
     ]
     if auth_type == "open":
-        cmds.append(["nmcli", "connection", "modify", profile_name, "802-11-wireless-security.key-mgmt", ""])
+        cmds.append(["nmcli", "connection", "modify", profile_name, "remove", "802-11-wireless-security"])
     elif auth_type == "wpa-psk":
         cmds.extend([["nmcli", "connection", "modify", profile_name, "wifi-sec.key-mgmt", "wpa-psk"], ["nmcli", "connection", "modify", profile_name, "wifi-sec.psk", password]])
     elif auth_type == "sae":
