@@ -13,11 +13,13 @@
   - `7954637` `refactor: split youtube live config and mode helpers`
   - `70d889f` `refactor: split youtube live state storage`
   - `7ac568b` `refactor: move youtube auth and api logic out of legacy`
+  - `fec0206` `refactor: move relay runtime and overlay services out of legacy`
+  - `ba93bc4` `refactor: move stream creation workflow out of legacy`
+  - `c4e5b51` `refactor: convert web ui into app factory and route modules`
+  - `bec5275` `refactor: extract web services for wifi overlay weather and updates`
+  - `b8e9882` `refactor: split lcd status into hardware state and render modules`
 - Remaining milestones:
-  - relay and overlay runtime split
-  - stream creation workflow split
-  - web UI modularization
-  - LCD/status modularization
+  - LCD app/bootstrap separation
   - final cleanup
   - each of the milestones above will be committed locally as its own checkpoint
 
