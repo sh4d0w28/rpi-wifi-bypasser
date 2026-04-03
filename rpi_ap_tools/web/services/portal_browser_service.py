@@ -1,5 +1,7 @@
 import os
 import queue
+import shlex
+import sys
 import threading
 import time
 from datetime import datetime
@@ -10,6 +12,8 @@ from rpi_ap_tools.core.files import load_json_file
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 PORTAL_CAPTURE_URL = os.environ.get("PORTAL_CAPTURE_URL", "http://connectivitycheck.gstatic.com/generate_204").strip()
 CAPTIVE_PORTAL_BROWSER_BIN = os.environ.get("CAPTIVE_PORTAL_BROWSER_BIN", "").strip()
+CAPTIVE_PORTAL_ACK_CMD = os.environ.get("CAPTIVE_PORTAL_ACK_CMD", "").strip()
+CAPTIVE_PORTAL_PYTHON = os.environ.get("CAPTIVE_PORTAL_PYTHON", "").strip()
 CAPTIVE_PORTAL_REMOTE_DIR = Path(os.environ.get("CAPTIVE_PORTAL_REMOTE_DIR", "/run/rpi_ap_tools_portal_remote"))
 CAPTIVE_PORTAL_REMOTE_IMAGE_PATH = CAPTIVE_PORTAL_REMOTE_DIR / "current.png"
 CAPTIVE_PORTAL_REMOTE_WIDTH = max(640, int(os.environ.get("CAPTIVE_PORTAL_REMOTE_WIDTH", "1365")))
@@ -35,6 +39,62 @@ def _current_portal_target():
         "url": final_url or requested_url or PORTAL_CAPTURE_URL,
         "wifi_name": wifi_name or str(portal.get("wifi_name", "")).strip() or "-",
     }
+
+
+def _candidate_portal_python_paths():
+    if CAPTIVE_PORTAL_PYTHON:
+        yield Path(CAPTIVE_PORTAL_PYTHON).expanduser()
+    if CAPTIVE_PORTAL_ACK_CMD:
+        try:
+            parts = shlex.split(CAPTIVE_PORTAL_ACK_CMD)
+        except ValueError:
+            parts = []
+        if parts:
+            yield Path(parts[0]).expanduser()
+    yield Path("/opt/rpi_ap_tools/.venv/bin/python")
+
+
+def _inject_site_packages_from_python(python_path):
+    try:
+        resolved = Path(python_path).resolve()
+    except OSError:
+        return False
+    if not resolved.is_file():
+        return False
+    venv_root = resolved.parent.parent
+    lib_dir = venv_root / "lib"
+    if not lib_dir.is_dir():
+        return False
+    injected = False
+    for site_packages in sorted(lib_dir.glob("python*/site-packages")):
+        if site_packages.is_dir():
+            site_packages_text = str(site_packages)
+            if site_packages_text not in sys.path:
+                sys.path.insert(0, site_packages_text)
+            injected = True
+    return injected
+
+
+def _load_sync_playwright():
+    try:
+        from playwright.sync_api import sync_playwright
+
+        return sync_playwright
+    except ModuleNotFoundError as exc:
+        if exc.name != "playwright":
+            raise
+    for python_path in _candidate_portal_python_paths():
+        if _inject_site_packages_from_python(python_path):
+            try:
+                from playwright.sync_api import sync_playwright
+
+                return sync_playwright
+            except ModuleNotFoundError as exc:
+                if exc.name != "playwright":
+                    raise
+    raise ModuleNotFoundError(
+        "playwright is not importable in the web UI process; set CAPTIVE_PORTAL_PYTHON to the venv Python that has playwright installed"
+    )
 
 
 class _PortalBrowserWorker:
@@ -116,9 +176,7 @@ class _PortalBrowserWorker:
         def ensure_runtime():
             nonlocal playwright, browser
             if playwright is None:
-                from playwright.sync_api import sync_playwright
-
-                playwright = sync_playwright().start()
+                playwright = _load_sync_playwright()().start()
             if browser is None:
                 launch_kwargs = {
                     "headless": True,

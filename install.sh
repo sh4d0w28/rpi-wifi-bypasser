@@ -86,6 +86,7 @@ EOF"
 fi
 append_env_if_missing "$PORTAL_ENV_FILE" CAPTIVE_PORTAL_BROWSER_BIN /usr/bin/chromium
 if [ -x "$PORTAL_ACK_PYTHON" ]; then
+  append_env_if_missing "$PORTAL_ENV_FILE" CAPTIVE_PORTAL_PYTHON "$PORTAL_ACK_PYTHON"
   append_env_if_missing "$PORTAL_ENV_FILE" CAPTIVE_PORTAL_ACK_CMD "$PORTAL_ACK_PYTHON $INSTALL_DIR/captive_portal_playwright.py"
 fi
 sudo chmod 600 "$PORTAL_ENV_FILE" || true
