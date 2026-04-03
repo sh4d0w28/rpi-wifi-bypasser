@@ -56,12 +56,14 @@ def _candidate_portal_python_paths():
 
 def _inject_site_packages_from_python(python_path):
     try:
-        resolved = Path(python_path).resolve()
+        python_path = Path(python_path).expanduser()
     except OSError:
         return False
-    if not resolved.is_file():
+    if not python_path.is_file():
         return False
-    venv_root = resolved.parent.parent
+    # Keep the venv path structure intact. Resolving the interpreter symlink can
+    # jump to the system Python binary and lose the venv root.
+    venv_root = python_path.parent.parent
     lib_dir = venv_root / "lib"
     if not lib_dir.is_dir():
         return False

@@ -21,11 +21,6 @@ bp = Blueprint("system", __name__)
 
 @bp.get("/", endpoint="index")
 def index():
-    page = (request.args.get("tab") or "").strip().lower()
-    if page in ("youtube", "stream"):
-        return redirect(url_for("youtube.stream_page"))
-    if page == "overlay":
-        return redirect(url_for("overlay.overlay_page"))
     return redirect(url_for("system.wifi_page"))
 
 
