@@ -320,6 +320,9 @@
       width: auto;
       margin: 0;
     }
+    .is-hidden {
+      display: none !important;
+    }
     @media (max-width: 860px) {
       .grid-2 { grid-template-columns: 1fr; }
     }
@@ -399,8 +402,8 @@
               {% endfor %}
             </datalist>
 
-            <label>Password</label>
-            <div class="field-row">
+            <label id="password-label" for="password">Password</label>
+            <div id="password-row" class="field-row">
               <input id="password" name="password" type="password" placeholder="Password">
               <button id="toggle-password" class="secondary-button" type="button">Show</button>
             </div>
@@ -789,19 +792,46 @@
   </div>
 
 <script>
+function syncWifiAuthUi() {
+  const authTypeInput = document.getElementById("auth_type");
+  const passwordInput = document.getElementById("password");
+  const passwordLabel = document.getElementById("password-label");
+  const passwordRow = document.getElementById("password-row");
+  const togglePassword = document.getElementById("toggle-password");
+  if (!authTypeInput || !passwordInput || !passwordLabel || !passwordRow || !togglePassword) {
+    return;
+  }
+  const isOpen = authTypeInput.value === "open";
+  passwordLabel.classList.toggle("is-hidden", isOpen);
+  passwordRow.classList.toggle("is-hidden", isOpen);
+  passwordInput.disabled = isOpen;
+  togglePassword.disabled = isOpen;
+  if (isOpen) {
+    passwordInput.type = "password";
+    togglePassword.textContent = "Show";
+  }
+}
+
 function prefillWifi(ssid, authType, password) {
   document.getElementById("ssid").value = ssid || "";
   document.getElementById("auth_type").value = authType || "wpa-psk";
   document.getElementById("password").value = password || "";
+  syncWifiAuthUi();
 
   const note = document.getElementById("prefill-note");
   if (note) {
     note.textContent = ssid
-      ? (password ? `Selected ${ssid}. Saved password loaded.` : `Selected ${ssid}. Enter the password if needed.`)
+      ? ((authType || "wpa-psk") === "open"
+          ? `Selected ${ssid}. Open network, no password needed.`
+          : (password ? `Selected ${ssid}. Saved password loaded.` : `Selected ${ssid}. Enter the password if needed.`))
       : "";
   }
 
-  document.getElementById("password").focus();
+  if ((authType || "wpa-psk") === "open") {
+    document.getElementById("auth_type").focus();
+  } else {
+    document.getElementById("password").focus();
+  }
 }
 
 const togglePassword = document.getElementById("toggle-password");
@@ -812,6 +842,12 @@ if (togglePassword) {
     passwordInput.type = showPassword ? "text" : "password";
     togglePassword.textContent = showPassword ? "Hide" : "Show";
   });
+}
+
+const authTypeInput = document.getElementById("auth_type");
+if (authTypeInput) {
+  authTypeInput.addEventListener("change", syncWifiAuthUi);
+  syncWifiAuthUi();
 }
 
 async function copyTextToClipboard(text) {
