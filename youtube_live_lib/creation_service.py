@@ -231,7 +231,7 @@ def start_stream_creation(*, validate_live_access_fn, ap_ip="-", title=None, rot
             fps_mode,
             privacy_status,
         )
-        argv = [sys.executable, str(Path(__file__).resolve().parent / "legacy.py"), "create", "--ap-ip", ap_ip or "-"]
+        argv = [sys.executable, str(Path(__file__).resolve().parent.parent / "youtube_live.py"), "create", "--ap-ip", ap_ip or "-"]
         if title:
             argv.extend(["--title", title])
         if audio_mode != DEFAULT_PROXY_AUDIO_MODE:

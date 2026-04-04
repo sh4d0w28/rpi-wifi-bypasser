@@ -567,7 +567,7 @@ def _stop_proxy_relay():
 
 
 def _start_overlay_feed(png_path):
-    argv = [sys.executable, str(Path(__file__).resolve().parent / "legacy.py"), "overlay-feed", "--png", png_path, "--interval", str(OVERLAY_FRAME_INTERVAL_SEC)]
+    argv = [sys.executable, str(Path(__file__).resolve().parent.parent / "youtube_live.py"), "overlay-feed", "--png", png_path, "--interval", str(OVERLAY_FRAME_INTERVAL_SEC)]
     return subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
