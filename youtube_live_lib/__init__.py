@@ -16,6 +16,7 @@ from .common import (
     qr_data_uri,
 )
 from .creation import _run_creation_job, load_creation_log, load_creation_state, start_stream_creation
+from .legacy import get_stream_monitor_status
 from .relay import (
     _coerce_float,
     _run_overlay_feed,
@@ -40,6 +41,7 @@ __all__ = [
     "ensure_overlay_html_exists",
     "ensure_proxy_relay_running",
     "get_auth_status",
+    "get_stream_monitor_status",
     "list_audio_modes",
     "list_fps_modes",
     "list_rotation_modes",

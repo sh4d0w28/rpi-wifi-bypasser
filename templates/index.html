@@ -746,23 +746,28 @@
         <div class="card">
           <h2>Manage stream</h2>
           {% if youtube_stream %}
+          <p><strong>WiFi:</strong> <span class="mono">{{ youtube_dashboard.wifi_name }}</span></p>
+          <p><strong>RTMP:</strong> <span class="mono">{{ youtube_dashboard.rtmp_endpoint }}</span></p>
+          <p><strong>Params:</strong> <span class="mono">{{ youtube_dashboard.params }}</span></p>
+          <p><strong>IN:</strong> <span class="mono">{{ youtube_dashboard.input_resolution }}</span></p>
+          <p><strong>OUT:</strong> <span class="mono">{{ youtube_dashboard.output_resolution }}</span></p>
+          <p><strong>YouTube:</strong> <span class="mono">{{ youtube_dashboard.youtube_status }}</span>{% if youtube_dashboard.youtube_message %} <span class="help-text">{{ youtube_dashboard.youtube_message }}</span>{% endif %}</p>
+          <p><strong>Relay:</strong> <span class="mono">{{ youtube_dashboard.relay_status }}</span></p>
+          {% if youtube_dashboard.problems %}
+          <p><strong>Problems:</strong></p>
+          {% for item in youtube_dashboard.problems %}
+          <p class="help-text">{{ item }}</p>
+          {% endfor %}
+          {% endif %}
           <p><strong>Title:</strong> <span class="mono">{{ youtube_stream.title }}</span></p>
-          <p><strong>Privacy:</strong> <span class="mono">{{ youtube_stream.privacy_status or 'public' }}</span></p>
-          <p><strong>Mode:</strong> <span class="mono">{{ youtube_stream.mode }}</span></p>
           {% if youtube_stream.watch_url %}
           <p><strong>Watch:</strong> <a href="{{ youtube_stream.watch_url }}" target="_blank" rel="noreferrer">{{ youtube_stream.watch_url }}</a></p>
           {% endif %}
           {% if youtube_stream.proxy_publish_url %}
-          <p><strong>Publish URL:</strong> <span class="mono">{{ youtube_stream.proxy_publish_url }}</span></p>
           <p><strong>Relay target:</strong> <span class="mono">{{ youtube_stream.target_url }}</span></p>
           <p><strong>Relay listen:</strong> <span class="mono">{{ youtube_stream.proxy_listen_url }}</span></p>
-          <p><strong>Audio mode:</strong> <span class="mono">{{ youtube_stream.audio_mode_label }}</span></p>
-          <p><strong>Rotation:</strong> <span class="mono">{{ youtube_stream.rotation_label or 'Off' }}</span></p>
-          <p><strong>FPS:</strong> <span class="mono">{{ youtube_stream.fps_mode_label or 'Original' }}</span></p>
           {% if youtube_stream.relay %}
-          <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
           <p><strong>Video encoder:</strong> <span class="mono">{{ youtube_stream.relay.video_encoder_label or youtube_stream.relay.video_encoder or 'copy' }}</span></p>
-          <p><strong>Video:</strong> <span class="mono">{% if youtube_stream.relay.video_width and youtube_stream.relay.video_height %}{{ youtube_stream.relay.video_width }}x{{ youtube_stream.relay.video_height }} ({{ youtube_stream.relay.video_orientation or 'unknown' }}){% else %}waiting for incoming stream{% endif %}</span></p>
           <p><strong>Overlay:</strong> <span class="mono">{{ 'visible' if youtube_stream.relay.overlay_enabled else 'hidden' }}</span></p>
           <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
           {% endif %}

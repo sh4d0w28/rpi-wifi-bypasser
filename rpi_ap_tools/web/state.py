@@ -1,6 +1,7 @@
 from youtube_live import (
     YouTubeLiveError,
     get_auth_status,
+    get_stream_monitor_status,
     list_audio_modes,
     list_fps_modes,
     list_rotation_modes,
@@ -33,6 +34,61 @@ from rpi_ap_tools.web.services.weather_service import load_overlay_weather
 from rpi_ap_tools.web.services.wifi_service import WLAN_IFACE, get_active_connection, get_ap_name, get_ip, get_saved_wifi, save_wifi_credentials, scan_wifi, connect_wifi
 
 
+def _strip_rtmp_scheme(url):
+    value = str(url or "").strip()
+    return value.replace("rtmp://", "").replace("rtmps://", "") if value else "-"
+
+
+def _rotation_param(rotation):
+    value = str(rotation or "0").strip()
+    return f"R:{value}"
+
+
+def _swap_resolution_if_rotated(width, height, rotation):
+    if not width or not height:
+        return "-"
+    if str(rotation) in ("90", "-90"):
+        return f"{height}x{width}"
+    return f"{width}x{height}"
+
+
+def _stream_dashboard(ap_name, stream_state, monitor):
+    relay = (stream_state or {}).get("relay") or {}
+    privacy = ((stream_state or {}).get("privacy_status") or "public").upper()
+    params = ", ".join(
+        [
+            privacy,
+            _rotation_param((stream_state or {}).get("rotation", "0")),
+            (stream_state or {}).get("fps_mode_short") or "ORIG",
+        ]
+    )
+    in_res = "-"
+    if relay.get("video_width") and relay.get("video_height"):
+        in_res = f"{relay.get('video_width')}x{relay.get('video_height')}"
+    out_res = _swap_resolution_if_rotated(relay.get("video_width"), relay.get("video_height"), (stream_state or {}).get("rotation", "0"))
+    problems = []
+    if monitor.get("message") and (not monitor.get("ok") or monitor.get("code") not in ("live", "ready", "stream_active")):
+        problems.append(monitor.get("message"))
+    for item in monitor.get("issues") or []:
+        if item and item not in problems:
+            problems.append(item)
+    if relay.get("status") == "stopped":
+        problems.append("Local relay is stopped.")
+    elif relay.get("status") == "standby" and (stream_state or {}).get("target_url"):
+        problems.append("Local relay is accepting RTMP but not forwarding to YouTube.")
+    return {
+        "wifi_name": ap_name or "-",
+        "rtmp_endpoint": _strip_rtmp_scheme((stream_state or {}).get("proxy_publish_url") or (stream_state or {}).get("target_url")),
+        "params": params,
+        "input_resolution": in_res,
+        "output_resolution": out_res,
+        "youtube_status": monitor.get("summary") or "UNKNOWN",
+        "youtube_message": monitor.get("message") or "",
+        "relay_status": relay.get("status") or "-",
+        "problems": problems,
+    }
+
+
 def index_context():
     wifi_list = scan_wifi()
     runtime = load_runtime_status()
@@ -41,13 +97,24 @@ def index_context():
     youtube_creation = load_creation_state()
     youtube_creation_log = load_creation_log()
     youtube_stream = load_stream_state()
+    try:
+        youtube_monitor = get_stream_monitor_status()
+    except YouTubeLiveError as exc:
+        youtube_monitor = {
+            "ok": False,
+            "code": "dashboard_error",
+            "summary": "DASHBOARD ERROR",
+            "message": str(exc),
+            "issues": [],
+        }
     youtube_ready = bool(
         youtube_auth.get("client_configured")
         and youtube_auth.get("authorized")
         and (youtube_auth.get("validation") or {}).get("ok")
     )
+    youtube_dashboard = _stream_dashboard(get_ap_name(), youtube_stream, youtube_monitor)
     return {
-        "ap_name": get_ap_name(),
+        "ap_name": youtube_dashboard["wifi_name"],
         "active": get_active_connection(),
         "wifi_list": wifi_list,
         "wlan1_ip": get_ip(WLAN_IFACE),
@@ -64,6 +131,8 @@ def index_context():
         "youtube_ready": youtube_ready,
         "youtube_creation": youtube_creation,
         "youtube_creation_log": youtube_creation_log,
+        "youtube_monitor": youtube_monitor,
+        "youtube_dashboard": youtube_dashboard,
         "youtube_stream": youtube_stream,
         "youtube_audio_modes": list_audio_modes(),
         "youtube_privacy_modes": [

@@ -390,7 +390,11 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode,
             argv.extend([video_encoder["name"], "-b:v", PROXY_HW_VIDEO_BITRATE, "-maxrate", PROXY_HW_VIDEO_BITRATE, "-bufsize", PROXY_HW_VIDEO_BITRATE, "-pix_fmt", "yuv420p"])
     else:
         argv.extend(["-c:v", "copy"])
-    argv.extend(["-f", "flv", target_url])
+    if target_url:
+        tee_target = f"[f=flv:onfail=ignore]{target_url}|[f=null]-"
+        argv.extend(["-f", "tee", tee_target])
+    else:
+        argv.extend(["-f", "null", "-"])
     return argv
 
 
@@ -597,8 +601,6 @@ def _await_relay_ready(proc, listen_url, target_url, log_path):
 
 
 def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_mode=None, rotation=None, fps_mode=None, overlay=None):
-    if not target_url:
-        raise YouTubeLiveError("Missing YouTube RTMP target for proxy relay")
     _stop_proxy_relay_unlocked()
     RELAY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log_handle = RELAY_LOG_PATH.open("ab")
@@ -655,7 +657,7 @@ def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_m
         raise
     relay = decorate_stream_state(
         {
-            "status": "running",
+            "status": "running" if target_url else "standby",
             "running": True,
             "pid": proc.pid,
             "listen_url": listen_url,
@@ -675,6 +677,7 @@ def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_m
             "overlay": overlay,
             "overlay_enabled": bool(overlay.get("enabled")),
             "overlay_feed_pid": overlay_feed.pid if overlay_feed else 0,
+            "forwarding": bool(target_url),
         },
         default_audio_mode=audio_mode,
         default_rotation=rotation,
@@ -825,20 +828,40 @@ def refresh_proxy_overlay():
 def ensure_proxy_relay_running():
     with _relay_lock():
         state = load_stream_state()
-        if not state or state.get("mode") != "proxy":
+        if not PROXY_ENABLED:
+            return state
+        if not state:
+            state = decorate_stream_state(
+                {
+                    "mode": "proxy",
+                    "title": "",
+                    "proxy_publish_url": _proxy_publish_url(""),
+                    "proxy_listen_url": _proxy_listen_url(),
+                    "target_url": "",
+                    "qr_payload": _proxy_publish_url(""),
+                    "audio_mode": "normal",
+                    "rotation": "0",
+                    "fps_mode": "original",
+                },
+                default_audio_mode="normal",
+                default_rotation="0",
+                default_fps_mode="original",
+            )
+        if state.get("mode") != "proxy":
             return state
         listen_url = state.get("proxy_listen_url", "")
         target_url = state.get("target_url", "")
-        if not listen_url or not target_url:
+        if not listen_url:
             return state
         relay = state.get("relay") or {}
         if relay.get("running"):
             return state
         LOGGER.warning(
-            "Proxy relay watchdog restarting relay: pid=%s running=%s listen_url=%s",
+            "Proxy relay watchdog restarting relay: pid=%s running=%s listen_url=%s target_url=%s",
             relay.get("pid"),
             relay.get("running"),
             listen_url,
+            target_url or "-",
         )
         state["relay"] = _start_proxy_relay_unlocked(
             listen_url=listen_url,
