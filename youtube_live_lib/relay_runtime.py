@@ -333,8 +333,7 @@ def _normalize_process_state(payload, *, check_fn):
 
 
 def _ingress_running(pid, state):
-    port = _listen_port_from_url(state.get("listen_url", ""))
-    return _pid_cmdline_contains(pid, state.get("listen_url", "")) and _relay_port_listening(port, pid)
+    return _pid_cmdline_contains(pid, state.get("listen_url", ""))
 
 
 def _egress_running(pid, state):
