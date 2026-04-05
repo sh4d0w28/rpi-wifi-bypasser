@@ -24,6 +24,7 @@ from .config import (
     PROXY_ENABLED,
     PROXY_HW_VIDEO_BITRATE,
     PROXY_HW_VIDEO_ENCODER,
+    PROXY_INTERNAL_UDP_PORT,
     PROXY_PUBLISH_URL_TEMPLATE,
     PROXY_RTMP_APP,
     PROXY_RTMP_PORT,
@@ -31,6 +32,7 @@ from .config import (
     PROXY_VIDEO_ENCODER,
     PROXY_VIDEO_PRESET,
     PROXY_ZMQ_PORT,
+    RELAY_EGRESS_LOG_PATH,
     RELAY_LOCK_PATH,
     RELAY_LOG_PATH,
     RELAY_START_TIMEOUT_SEC,
@@ -54,8 +56,8 @@ from .storage import (
     clear_relay_state,
     coerce_float as _coerce_float,
     ensure_overlay_png_exists,
+    load_json,
     load_overlay_state,
-    load_relay_state as storage_load_relay_state,
     load_stream_state as storage_load_stream_state,
     normalize_overlay_state,
     save_relay_state,
@@ -100,6 +102,18 @@ def _relay_pid_matches(pid, listen_url="", target_url=""):
     if target_url and target_url not in cmdline:
         return False
     return True
+
+
+def _pid_cmdline_contains(pid, *tokens):
+    if not _pid_alive(pid):
+        return False
+    cmdline = _pid_cmdline(pid)
+    if not cmdline:
+        return False
+    ffmpeg_name = Path(FFMPEG_BIN).name
+    if ffmpeg_name not in cmdline and "ffmpeg" not in cmdline:
+        return False
+    return all(not token or token in cmdline for token in tokens)
 
 
 def _listen_port_from_url(listen_url):
@@ -305,8 +319,85 @@ def _populate_relay_video_fields(state):
     return payload
 
 
+def _normalize_process_state(payload, *, check_fn):
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    state = dict(payload)
+    pid = state.get("pid")
+    state["running"] = bool(pid and check_fn(pid, state))
+    if not state["running"] and state.get("status") in ("running", "standby"):
+        state["status"] = "stopped"
+        state.setdefault("stopped_at", time.time())
+    return state
+
+
+def _ingress_running(pid, state):
+    port = _listen_port_from_url(state.get("listen_url", ""))
+    return _pid_cmdline_contains(pid, state.get("listen_url", "")) and _relay_port_listening(port, pid)
+
+
+def _egress_running(pid, state):
+    tokens = [state.get("input_url", "")]
+    if state.get("target_url"):
+        tokens.append(state.get("target_url", ""))
+    return _pid_cmdline_contains(pid, *tokens)
+
+
+def _compose_relay_state(*, ingress, egress, stream_title="", audio_mode=None, rotation=None, fps_mode=None, overlay=None):
+    ingress = decorate_stream_state(ingress or {}, default_audio_mode=audio_mode, default_rotation=rotation, default_fps_mode=fps_mode)
+    egress = decorate_stream_state(egress or {}, default_audio_mode=audio_mode, default_rotation=rotation, default_fps_mode=fps_mode)
+    relay = decorate_stream_state(
+        {
+            "pid": ingress.get("pid", 0),
+            "listen_url": ingress.get("listen_url", ""),
+            "target_url": egress.get("target_url", ""),
+            "log_path": ingress.get("log_path", ""),
+            "egress_log_path": egress.get("log_path", ""),
+            "control_url": ingress.get("control_url", ""),
+            "stream_title": stream_title,
+            "started_at": ingress.get("started_at") or egress.get("started_at") or time.time(),
+            "ffmpeg_bin": FFMPEG_BIN,
+            "mode": ingress.get("mode", ""),
+            "video_encoder": ingress.get("video_encoder", ""),
+            "video_encoder_kind": ingress.get("video_encoder_kind", ""),
+            "video_encoder_label": ingress.get("video_encoder_label", ""),
+            "audio_mode": ingress.get("audio_mode") or audio_mode,
+            "rotation": ingress.get("rotation") or rotation,
+            "fps_mode": ingress.get("fps_mode") or fps_mode,
+            "overlay": ingress.get("overlay") or overlay or {},
+            "overlay_enabled": bool((ingress.get("overlay") or overlay or {}).get("enabled")),
+            "overlay_feed_pid": ingress.get("overlay_feed_pid", 0),
+            "internal_output_url": ingress.get("output_url", ""),
+            "internal_input_url": egress.get("input_url", _proxy_internal_input_url()),
+            "warning": ingress.get("warning") or egress.get("warning") or "",
+            "ingress": ingress,
+            "egress": egress,
+        },
+        default_audio_mode=audio_mode,
+        default_rotation=rotation,
+        default_fps_mode=fps_mode,
+    )
+    relay["running"] = bool(ingress.get("running"))
+    relay["forwarding"] = bool(egress.get("running") and egress.get("target_url"))
+    relay["status"] = "running" if relay["forwarding"] else "standby" if relay["running"] else "stopped"
+    return _populate_relay_video_fields(relay)
+
+
 def load_relay_state():
-    return storage_load_relay_state(populate_relay_video_fields=_populate_relay_video_fields, relay_pid_matches=_relay_pid_matches)
+    raw = load_json(RELAY_STATE_PATH, {})
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    ingress = _normalize_process_state(raw.get("ingress") or {}, check_fn=_ingress_running)
+    egress = _normalize_process_state(raw.get("egress") or {}, check_fn=_egress_running)
+    return _compose_relay_state(
+        ingress=ingress,
+        egress=egress,
+        stream_title=raw.get("stream_title", ""),
+        audio_mode=raw.get("audio_mode"),
+        rotation=raw.get("rotation"),
+        fps_mode=raw.get("fps_mode"),
+        overlay=raw.get("overlay"),
+    )
 
 
 def load_stream_state():
@@ -330,6 +421,14 @@ def _proxy_control_url():
     return f"tcp://127.0.0.1:{PROXY_ZMQ_PORT}"
 
 
+def _proxy_internal_output_url():
+    return f"udp://127.0.0.1:{PROXY_INTERNAL_UDP_PORT}?pkt_size=1316"
+
+
+def _proxy_internal_input_url():
+    return f"udp://127.0.0.1:{PROXY_INTERNAL_UDP_PORT}?fifo_size=1000000&overrun_nonfatal=1"
+
+
 def _ffmpeg_escape_filter_value(value):
     return value.replace("\\", "\\\\").replace(":", "\\:")
 
@@ -346,7 +445,7 @@ def _relay_audio_filter():
     )
 
 
-def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode, overlay=None, overlay_fd=None):
+def _proxy_ingress_argv(*, listen_url, audio_mode, rotation, fps_mode, overlay=None, overlay_fd=None):
     rotation = normalize_rotation_mode(rotation)
     rotation_spec = rotation_mode_spec(rotation)
     fps_mode = normalize_fps_mode(fps_mode)
@@ -390,9 +489,16 @@ def _proxy_relay_argv(*, listen_url, target_url, audio_mode, rotation, fps_mode,
             argv.extend([video_encoder["name"], "-b:v", PROXY_HW_VIDEO_BITRATE, "-maxrate", PROXY_HW_VIDEO_BITRATE, "-bufsize", PROXY_HW_VIDEO_BITRATE, "-pix_fmt", "yuv420p"])
     else:
         argv.extend(["-c:v", "copy"])
+    tee_target = f"[f=mpegts:onfail=ignore]{_proxy_internal_output_url()}|[f=null]-"
+    argv.extend(["-f", "tee", tee_target])
+    return argv
+
+
+def _proxy_egress_argv(*, target_url):
+    argv = [FFMPEG_BIN, "-hide_banner", "-loglevel", "info", "-stats", "-i", _proxy_internal_input_url()]
+    argv.extend(["-map", "0:v?", "-map", "0:a?", "-c:v", "copy", "-c:a", "copy"])
     if target_url:
-        tee_target = f"[f=flv:onfail=ignore]{target_url}|[f=null]-"
-        argv.extend(["-f", "tee", tee_target])
+        argv.extend(["-f", "flv", target_url])
     else:
         argv.extend(["-f", "null", "-"])
     return argv
@@ -532,37 +638,45 @@ def build_publish_info(stream_name, ingestion_info, ap_ip):
     }
 
 
-def _stop_proxy_relay_unlocked():
-    relay = load_relay_state()
-    pid = relay.get("pid")
-    overlay_feed_pid = relay.get("overlay_feed_pid")
-    port = _listen_port_from_url(relay.get("listen_url", ""))
-    if not pid or not relay.get("running"):
-        clear_relay_state()
+def _stop_process(pid, timeout_sec):
+    if not pid:
         return
     try:
         os.kill(int(pid), signal.SIGTERM)
     except OSError:
-        pass
-    if pid and not _wait_pid_exit(pid, RELAY_STOP_TIMEOUT_SEC):
+        return
+    if not _wait_pid_exit(pid, timeout_sec):
         try:
             os.kill(int(pid), signal.SIGKILL)
         except OSError:
             pass
         _wait_pid_exit(pid, 1.5)
-    if overlay_feed_pid:
-        try:
-            os.kill(int(overlay_feed_pid), signal.SIGTERM)
-        except OSError:
-            pass
-        if not _wait_pid_exit(overlay_feed_pid, 1.5):
-            try:
-                os.kill(int(overlay_feed_pid), signal.SIGKILL)
-            except OSError:
-                pass
-            _wait_pid_exit(overlay_feed_pid, 1.0)
+
+
+def _stop_proxy_egress_unlocked(relay=None):
+    relay = relay or load_relay_state()
+    egress = (relay or {}).get("egress") or {}
+    _stop_process(egress.get("pid"), RELAY_STOP_TIMEOUT_SEC)
+
+
+def _stop_proxy_ingress_unlocked(relay=None):
+    relay = relay or load_relay_state()
+    ingress = (relay or {}).get("ingress") or relay or {}
+    overlay_feed_pid = ingress.get("overlay_feed_pid") or relay.get("overlay_feed_pid")
+    port = _listen_port_from_url(ingress.get("listen_url", "") or relay.get("listen_url", ""))
+    _stop_process(ingress.get("pid") or relay.get("pid"), RELAY_STOP_TIMEOUT_SEC)
+    _stop_process(overlay_feed_pid, 1.5)
     _wait_port_release(port, timeout_sec=RELAY_STOP_TIMEOUT_SEC)
-    save_relay_state({**relay, "running": False, "status": "stopped", "stopped_at": time.time()})
+
+
+def _stop_proxy_relay_unlocked():
+    relay = load_relay_state()
+    if not relay:
+        clear_relay_state()
+        return
+    _stop_proxy_egress_unlocked(relay)
+    _stop_proxy_ingress_unlocked(relay)
+    save_relay_state({**relay, "running": False, "forwarding": False, "status": "stopped", "stopped_at": time.time()})
 
 
 def _stop_proxy_relay():
@@ -600,8 +714,49 @@ def _await_relay_ready(proc, listen_url, target_url, log_path):
     raise YouTubeLiveError(f"Proxy relay did not open listen port {port} in time")
 
 
-def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_mode=None, rotation=None, fps_mode=None, overlay=None):
-    _stop_proxy_relay_unlocked()
+def _await_egress_ready(proc, input_url, target_url, log_path):
+    deadline = time.time() + RELAY_START_TIMEOUT_SEC
+    while time.time() < deadline:
+        exit_code = proc.poll()
+        if exit_code is not None:
+            detail = _tail_log_text(log_path)
+            if detail:
+                raise YouTubeLiveError(f"Proxy egress exited early: {detail.splitlines()[-1]}")
+            raise YouTubeLiveError(f"Proxy egress exited early with code {exit_code}")
+        if _pid_cmdline_contains(proc.pid, input_url, target_url or ""):
+            return
+        time.sleep(0.1)
+    if not _pid_cmdline_contains(proc.pid, input_url, target_url or ""):
+        raise YouTubeLiveError("Proxy egress failed to stay alive after launch")
+
+
+def _overlay_signature(overlay):
+    overlay = normalize_overlay_state(overlay or {})
+    return (
+        bool(overlay.get("enabled")),
+        overlay.get("x"),
+        overlay.get("y"),
+        overlay.get("width"),
+        overlay.get("height"),
+        overlay.get("opacity"),
+        overlay.get("png_path"),
+    )
+
+
+def _can_reuse_ingress(relay, *, listen_url, audio_mode, rotation, fps_mode, overlay):
+    ingress = (relay or {}).get("ingress") or {}
+    if not ingress.get("running"):
+        return False
+    return (
+        ingress.get("listen_url") == listen_url
+        and normalize_audio_mode(ingress.get("audio_mode")) == normalize_audio_mode(audio_mode)
+        and normalize_rotation_mode(ingress.get("rotation")) == normalize_rotation_mode(rotation)
+        and normalize_fps_mode(ingress.get("fps_mode")) == normalize_fps_mode(fps_mode)
+        and _overlay_signature(ingress.get("overlay")) == _overlay_signature(overlay)
+    )
+
+
+def _start_proxy_ingress_unlocked(*, listen_url, stream_title, audio_mode=None, rotation=None, fps_mode=None, overlay=None):
     RELAY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     log_handle = RELAY_LOG_PATH.open("ab")
     audio_mode = normalize_audio_mode(audio_mode)
@@ -617,7 +772,7 @@ def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_m
         if overlay_feed.stdout is not None:
             overlay_fd = overlay_feed.stdout.fileno()
     video_pipeline = _proxy_video_pipeline_state(rotation, fps_mode, overlay)
-    argv = _proxy_relay_argv(listen_url=listen_url, target_url=target_url, audio_mode=audio_mode, rotation=rotation, fps_mode=fps_mode, overlay=overlay, overlay_fd=overlay_fd)
+    argv = _proxy_ingress_argv(listen_url=listen_url, audio_mode=audio_mode, rotation=rotation, fps_mode=fps_mode, overlay=overlay, overlay_fd=overlay_fd)
     try:
         proc = subprocess.Popen(
             argv,
@@ -641,7 +796,7 @@ def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_m
     if overlay_feed and overlay_feed.stdout is not None:
         overlay_feed.stdout.close()
     try:
-        _await_relay_ready(proc, listen_url, target_url, RELAY_LOG_PATH)
+        _await_relay_ready(proc, listen_url, "", RELAY_LOG_PATH)
     except Exception:
         try:
             proc.terminate()
@@ -655,13 +810,12 @@ def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_m
         clear_relay_state()
         log_handle.close()
         raise
-    relay = decorate_stream_state(
+    ingress = decorate_stream_state(
         {
-            "status": "running" if target_url else "standby",
+            "status": "running",
             "running": True,
             "pid": proc.pid,
             "listen_url": listen_url,
-            "target_url": target_url,
             "log_path": str(RELAY_LOG_PATH),
             "control_url": _proxy_control_url(),
             "stream_title": stream_title,
@@ -677,7 +831,7 @@ def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_m
             "overlay": overlay,
             "overlay_enabled": bool(overlay.get("enabled")),
             "overlay_feed_pid": overlay_feed.pid if overlay_feed else 0,
-            "forwarding": bool(target_url),
+            "output_url": _proxy_internal_output_url(),
         },
         default_audio_mode=audio_mode,
         default_rotation=rotation,
@@ -685,11 +839,81 @@ def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_m
     )
     if audio_mode != "normal":
         try:
-            _apply_live_audio_mode(relay, audio_mode)
+            _apply_live_audio_mode(ingress, audio_mode)
         except YouTubeLiveError as exc:
-            relay["warning"] = f"Audio mode pending until relay is ready: {exc}"
+            ingress["warning"] = f"Audio mode pending until relay is ready: {exc}"
             LOGGER.warning("Proxy relay started but initial live audio mode command failed: mode=%s error=%s", audio_mode, exc)
     log_handle.close()
+    return ingress
+
+
+def _start_proxy_egress_unlocked(*, target_url):
+    RELAY_EGRESS_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = RELAY_EGRESS_LOG_PATH.open("ab")
+    argv = _proxy_egress_argv(target_url=target_url)
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except FileNotFoundError as exc:
+        log_handle.close()
+        raise YouTubeLiveError(f"{FFMPEG_BIN} is not installed; proxy relay cannot start") from exc
+    try:
+        _await_egress_ready(proc, _proxy_internal_input_url(), target_url, RELAY_EGRESS_LOG_PATH)
+    except Exception:
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        log_handle.close()
+        raise
+    log_handle.close()
+    return {
+        "status": "running" if target_url else "standby",
+        "running": True,
+        "pid": proc.pid,
+        "input_url": _proxy_internal_input_url(),
+        "target_url": target_url,
+        "log_path": str(RELAY_EGRESS_LOG_PATH),
+        "started_at": time.time(),
+        "forwarding": bool(target_url),
+    }
+
+
+def _start_proxy_relay_unlocked(*, listen_url, target_url, stream_title, audio_mode=None, rotation=None, fps_mode=None, overlay=None):
+    current = load_relay_state()
+    audio_mode = normalize_audio_mode(audio_mode)
+    rotation = normalize_rotation_mode(rotation)
+    fps_mode = normalize_fps_mode(fps_mode)
+    overlay = normalize_overlay_state(overlay or load_overlay_state())
+    if _can_reuse_ingress(current, listen_url=listen_url, audio_mode=audio_mode, rotation=rotation, fps_mode=fps_mode, overlay=overlay):
+        ingress = (current.get("ingress") or {}).copy()
+    else:
+        _stop_proxy_ingress_unlocked(current)
+        ingress = _start_proxy_ingress_unlocked(
+            listen_url=listen_url,
+            stream_title=stream_title,
+            audio_mode=audio_mode,
+            rotation=rotation,
+            fps_mode=fps_mode,
+            overlay=overlay,
+        )
+    _stop_proxy_egress_unlocked(current)
+    egress = _start_proxy_egress_unlocked(target_url=target_url)
+    relay = _compose_relay_state(
+        ingress=ingress,
+        egress=egress,
+        stream_title=stream_title,
+        audio_mode=audio_mode,
+        rotation=rotation,
+        fps_mode=fps_mode,
+        overlay=overlay,
+    )
     save_relay_state(relay)
     return relay
 
@@ -716,7 +940,7 @@ def set_proxy_audio_mode(mode):
         raise YouTubeLiveError("Audio mode switching is only available when proxy relay mode is enabled")
     listen_url = state.get("proxy_listen_url", "")
     target_url = state.get("target_url", "")
-    if not listen_url or not target_url:
+    if not listen_url:
         raise YouTubeLiveError("Proxy relay settings are incomplete")
     current_mode = normalize_audio_mode((state.get("relay") or {}).get("audio_mode") or state.get("audio_mode"))
     relay = state.get("relay") or {}
@@ -730,7 +954,7 @@ def set_proxy_audio_mode(mode):
         relay["audio_mode_short"] = audio_mode_spec(desired_mode)["short_label"]
         relay["audio_mode_description"] = audio_mode_spec(desired_mode)["description"]
         relay["updated_at"] = time.time()
-        relay["status"] = "running"
+        relay["status"] = "running" if relay.get("forwarding") else "standby"
         state["relay"] = relay
     else:
         state["relay"] = _start_proxy_relay(
@@ -754,7 +978,7 @@ def set_proxy_rotation_mode(mode):
         raise YouTubeLiveError("Rotation switching is only available when proxy relay mode is enabled")
     listen_url = state.get("proxy_listen_url", "")
     target_url = state.get("target_url", "")
-    if not listen_url or not target_url:
+    if not listen_url:
         raise YouTubeLiveError("Proxy relay settings are incomplete")
     current_mode = normalize_rotation_mode((state.get("relay") or {}).get("rotation") or state.get("rotation"))
     relay = state.get("relay") or {}
@@ -782,7 +1006,7 @@ def set_proxy_fps_mode(mode):
         raise YouTubeLiveError("FPS switching is only available when proxy relay mode is enabled")
     listen_url = state.get("proxy_listen_url", "")
     target_url = state.get("target_url", "")
-    if not listen_url or not target_url:
+    if not listen_url:
         raise YouTubeLiveError("Proxy relay settings are incomplete")
     current_mode = normalize_fps_mode((state.get("relay") or {}).get("fps_mode") or state.get("fps_mode"))
     relay = state.get("relay") or {}
@@ -809,7 +1033,7 @@ def refresh_proxy_overlay():
         raise YouTubeLiveError("Overlay refresh is only available when proxy relay mode is enabled")
     listen_url = state.get("proxy_listen_url", "")
     target_url = state.get("target_url", "")
-    if not listen_url or not target_url:
+    if not listen_url:
         raise YouTubeLiveError("Proxy relay settings are incomplete")
     relay = state.get("relay") or {}
     state["relay"] = _start_proxy_relay(
@@ -854,12 +1078,16 @@ def ensure_proxy_relay_running():
         if not listen_url:
             return state
         relay = state.get("relay") or {}
-        if relay.get("running"):
+        ingress = relay.get("ingress") or {}
+        egress = relay.get("egress") or {}
+        if ingress.get("running") and egress.get("running"):
             return state
         LOGGER.warning(
-            "Proxy relay watchdog restarting relay: pid=%s running=%s listen_url=%s target_url=%s",
-            relay.get("pid"),
-            relay.get("running"),
+            "Proxy relay watchdog repairing relay: ingress_pid=%s ingress_running=%s egress_pid=%s egress_running=%s listen_url=%s target_url=%s",
+            ingress.get("pid") or relay.get("pid"),
+            ingress.get("running") or relay.get("running"),
+            egress.get("pid"),
+            egress.get("running"),
             listen_url,
             target_url or "-",
         )

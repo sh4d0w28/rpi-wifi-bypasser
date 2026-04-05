@@ -11,7 +11,7 @@ from pathlib import Path
 from .config import CREATION_LOG_PATH, DEFAULT_PROXY_AUDIO_MODE, PROXY_ENABLED, STREAM_CREATE_LOCK_PATH, STREAM_PRIVACY_STATUS, STREAM_TITLE_PREFIX
 from .errors import YouTubeLiveError
 from .modes import normalize_audio_mode, normalize_fps_mode, normalize_rotation_mode
-from .relay_runtime import build_publish_info, _relay_lock, _start_proxy_relay_unlocked, _stop_proxy_relay_unlocked
+from .relay_runtime import build_publish_info, _relay_lock, _start_proxy_relay_unlocked
 from .storage import load_creation_state, load_overlay_state, reset_creation_log, save_creation_state, save_stream_state, update_creation_state
 
 LOGGER = logging.getLogger(__name__)
@@ -119,7 +119,6 @@ def create_stream_bundle(*, api_request_fn, ap_ip="-", title=None, rotation=None
         **publish,
     }
     with _relay_lock():
-        _stop_proxy_relay_unlocked()
         if state.get("mode") == "proxy":
             state["relay"] = _start_proxy_relay_unlocked(
                 listen_url=state.get("proxy_listen_url", ""),

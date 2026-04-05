@@ -13,6 +13,7 @@ STREAM_CREATE_LOCK_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_LOCK_PATH",
 CREATION_LOG_PATH = Path(os.environ.get("YOUTUBE_CREATE_LOG_PATH", "/run/rpi_ap_tools_youtube_create.log"))
 RELAY_STATE_PATH = Path(os.environ.get("YOUTUBE_RELAY_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_relay.json"))
 RELAY_LOG_PATH = Path(os.environ.get("YOUTUBE_RELAY_LOG_PATH", "/run/rpi_ap_tools_youtube_relay.log"))
+RELAY_EGRESS_LOG_PATH = Path(os.environ.get("YOUTUBE_RELAY_EGRESS_LOG_PATH", "/run/rpi_ap_tools_youtube_egress.log"))
 RELAY_LOCK_PATH = Path(os.environ.get("YOUTUBE_RELAY_LOCK_PATH", "/run/rpi_ap_tools_youtube_relay.lock"))
 OVERLAY_STATE_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_overlay.json"))
 OVERLAY_HTML_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_HTML_PATH", "/var/lib/rpi_ap_tools/youtube_overlay.html"))
@@ -24,6 +25,7 @@ PROXY_PUBLISH_URL_TEMPLATE = os.environ.get("YOUTUBE_PROXY_PUBLISH_URL", "").str
 PROXY_RTMP_PORT = int(os.environ.get("YOUTUBE_PROXY_RTMP_PORT", "1935") or "1935")
 PROXY_RTMP_APP = os.environ.get("YOUTUBE_PROXY_RTMP_APP", "live").strip().strip("/")
 PROXY_ZMQ_PORT = int(os.environ.get("YOUTUBE_PROXY_ZMQ_PORT", "5559") or "5559")
+PROXY_INTERNAL_UDP_PORT = int(os.environ.get("YOUTUBE_PROXY_INTERNAL_UDP_PORT", "23000") or "23000")
 FFMPEG_BIN = os.environ.get("YOUTUBE_PROXY_FFMPEG_BIN", "ffmpeg").strip() or "ffmpeg"
 DEFAULT_PROXY_AUDIO_MODE = "normal"
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
@@ -141,4 +143,3 @@ DEFAULT_OVERLAY_HTML = """<!doctype html>
 </body>
 </html>
 """
-
