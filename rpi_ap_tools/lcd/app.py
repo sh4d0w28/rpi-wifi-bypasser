@@ -48,6 +48,7 @@ from youtube_live import (
     start_device_authorization,
     start_stream_creation,
 )
+from youtube_live_lib.storage import write_transparent_overlay_png
 
 
 LCD_1in44, config = load_waveshare_modules()
@@ -250,12 +251,14 @@ def main():
 
     def apply_overlay_demo(template_name):
         overlay = load_overlay_state()
+        previous_structural = {key: overlay.get(key) for key in ("x", "y", "width", "height", "opacity")}
         overlay["enabled"] = template_name != "off"
         overlay["opacity"] = 1.0
         if template_name == "weather":
             overlay.update({"x": 0, "y": 0, "width": 1920, "height": 1080, "refresh_sec": 600})
         else:
             overlay.update({"x": 36, "y": 36, "width": 420, "height": 240, "refresh_sec": 10})
+        overlay["last_rendered_at"] = 0
         save_overlay_state(overlay)
         ensure_overlay_html_exists()
         html_path = Path(overlay.get("html_path") or "")
@@ -263,9 +266,17 @@ def main():
         if template_name != "off" and html_path:
             html_path.parent.mkdir(parents=True, exist_ok=True)
             html_path.write_text(html, encoding="utf-8")
+        elif template_name == "off":
+            png_path = Path(overlay.get("png_path") or "")
+            if png_path:
+                write_transparent_overlay_png(png_path)
+        new_structural = {key: overlay.get(key) for key in ("x", "y", "width", "height", "opacity")}
         try:
-            refresh_proxy_overlay()
-            set_ui_message(f"Overlay {template_name}")
+            if previous_structural != new_structural:
+                refresh_proxy_overlay()
+                set_ui_message(f"Overlay {template_name}")
+            else:
+                set_ui_message(f"Overlay {template_name} saved")
         except YouTubeLiveError:
             set_ui_message(f"Overlay {template_name} saved")
 
