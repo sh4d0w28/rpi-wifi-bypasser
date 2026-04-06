@@ -91,24 +91,24 @@
       gap: 10px;
       margin-bottom: 16px;
     }
-    .tab-button {
-      width: auto;
+    .tab-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       min-width: 110px;
       padding: 12px 16px;
       border-radius: 999px;
       border: 1px solid var(--field-border);
       background: rgba(15, 23, 42, 0.84);
       color: var(--text);
-      cursor: pointer;
+      text-decoration: none;
     }
-    .tab-button.active {
+    .tab-link.active {
       background: linear-gradient(135deg, #38bdf8, #22c55e);
       color: #052033;
       border-color: transparent;
       font-weight: 700;
     }
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
     .grid-2 {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -288,6 +288,50 @@
       max-height: 420px;
       object-fit: contain;
     }
+    .portal-preview-shot img {
+      width: 100%;
+      max-height: 760px;
+      object-fit: contain;
+      display: block;
+    }
+    .portal-candidate-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .portal-candidate-item {
+      border: 1px solid var(--field-border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(15, 23, 42, 0.72);
+    }
+    .portal-candidate-item.recommended {
+      border-color: var(--field-focus);
+      box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.25);
+      background: rgba(56, 189, 248, 0.12);
+    }
+    .remote-browser-image {
+      position: relative;
+      cursor: crosshair;
+    }
+    .remote-browser-image img {
+      width: 100%;
+      display: block;
+      object-fit: contain;
+    }
+    .remote-browser-controls {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .remote-browser-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+    }
+    .remote-browser-grid button {
+      width: 100%;
+    }
     .checkbox-row {
       display: flex;
       align-items: center;
@@ -297,6 +341,9 @@
     .checkbox-row input {
       width: auto;
       margin: 0;
+    }
+    .is-hidden {
+      display: none !important;
     }
     @media (max-width: 860px) {
       .grid-2 { grid-template-columns: 1fr; }
@@ -338,12 +385,13 @@
     <div class="hero">
       <div>
         <h1>RPi uplink control</h1>
-        <p>Manage `wlan1`, YouTube relay, HTML-to-PNG overlays, and system actions from one page.</p>
+        <p>Manage Wi-Fi, stream setup, and overlay control from dedicated pages.</p>
       </div>
       <div class="hero-badges">
         <div class="hero-badge"><strong>AP</strong> <span class="mono">{{ ap_name }}</span></div>
         <div class="hero-badge"><strong>Uplink</strong> <span class="mono">{{ active.name or 'none' }}</span></div>
         <div class="hero-badge"><strong>Overlay</strong> <span class="mono">{{ 'on' if overlay.enabled else 'off' }}</span></div>
+        <div class="hero-badge"><strong>Build</strong> <span class="mono">{{ update_status.current_ref or '-' }}{% if update_status.current_commit %} @ {{ update_status.current_commit }}{% endif %}</span></div>
       </div>
     </div>
 
@@ -358,13 +406,13 @@
     {% endwith %}
 
     <div class="tabs">
-      <button type="button" class="tab-button" data-tab="wifi">Wi-Fi</button>
-      <button type="button" class="tab-button" data-tab="youtube">YouTube</button>
-      <button type="button" class="tab-button" data-tab="overlay">Overlay</button>
-      <button type="button" class="tab-button" data-tab="system">System</button>
+      <a class="tab-link {{ 'active' if current_page == 'wifi' else '' }}" href="{{ url_for('system.wifi_page') }}">Wi-Fi</a>
+      <a class="tab-link {{ 'active' if current_page == 'stream' else '' }}" href="{{ url_for('youtube.stream_page') }}">Stream</a>
+      <a class="tab-link {{ 'active' if current_page == 'overlay' else '' }}" href="{{ url_for('overlay.overlay_page') }}">Overlay</a>
     </div>
 
-    <section id="tab-wifi" class="tab-panel stack">
+    {% if current_page == 'wifi' %}
+    <section class="stack">
       <div class="grid-2">
         <div class="card">
           <h2>Connect `wlan1`</h2>
@@ -377,8 +425,8 @@
               {% endfor %}
             </datalist>
 
-            <label>Password</label>
-            <div class="field-row">
+            <label id="password-label" for="password">Password</label>
+            <div id="password-row" class="field-row">
               <input id="password" name="password" type="password" placeholder="Password">
               <button id="toggle-password" class="secondary-button" type="button">Show</button>
             </div>
@@ -472,9 +520,139 @@
           </tbody>
         </table>
       </div>
-    </section>
+      <div class="grid-2">
+        <div class="card">
+          <h2>System status</h2>
+          <p><strong>AP name:</strong> <span class="mono">{{ ap_name }}</span></p>
+          <p><strong>wlan0 IP:</strong> <span class="mono">{{ wlan0_ip }}</span></p>
+          <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
+          {% if runtime.probe and runtime.probe.portal_capture and (runtime.probe.portal_capture.final_url or runtime.probe.portal_capture.requested_url) %}
+          <p><strong>Portal URL:</strong> <span class="mono">{{ runtime.probe.portal_capture.final_url or runtime.probe.portal_capture.requested_url }}</span></p>
+          {% endif %}
+          {% if runtime.probe and runtime.probe.portal_capture and runtime.probe.portal_capture.html_path %}
+          <p><strong>Portal HTML:</strong> <span class="mono">{{ runtime.probe.portal_capture.html_path }}</span></p>
+          {% endif %}
+          {% if portal_capture_available %}
+          <form method="post" action="/portal-capture">
+            <button type="submit" class="secondary-button">Refresh portal capture</button>
+          </form>
+          {% endif %}
+          {% if portal_preview_available %}
+          <form method="post" action="/portal-preview">
+            <button type="submit" class="secondary-button">Refresh portal preview</button>
+          </form>
+          {% endif %}
+          {% if portal_ack_available %}
+          <form method="post" action="/portal-ack">
+            <button type="submit" class="secondary-button">Run portal action</button>
+          </form>
+          {% endif %}
+        </div>
 
-    <section id="tab-youtube" class="tab-panel stack">
+        <div class="card">
+          <h2>Software update</h2>
+          <p><strong>Script:</strong> <span class="mono">{{ update_status.script_path }}</span></p>
+          <p><strong>Repo:</strong> <span class="mono">{{ update_status.repo_path }}</span></p>
+          <p><strong>Current build:</strong> <span class="mono">{{ update_status.current_ref or '-' }}{% if update_status.current_commit %} @ {{ update_status.current_commit }}{% endif %}</span></p>
+          <p><strong>Update job:</strong> <span class="{{ update_status.status_class }}">{{ update_status.summary }}</span></p>
+          {% if update_status.last_started %}
+          <p><strong>Last start:</strong> <span class="mono">{{ update_status.last_started }}</span></p>
+          {% endif %}
+          <form method="post" action="/update">
+            <label for="git-ref">Git branch or tag</label>
+            <input id="git-ref" name="git_ref" list="update-ref-list" value="{{ update_status.ref_input_value or '' }}" placeholder="main or v1.2.3">
+            <datalist id="update-ref-list">
+              {% for item in update_status.ref_options %}
+              <option value="{{ item }}"></option>
+              {% endfor %}
+            </datalist>
+            <button type="submit" {% if not update_status.can_start %}disabled{% endif %}>{{ "Update running..." if update_status.running else "Run update script" }}</button>
+          </form>
+          <p class="help-text">Enter a branch or tag. Branches switch to the latest `origin/<name>`; tags switch to a detached HEAD at that tag.</p>
+          <p class="help-text">Logs: <span class="mono">journalctl -u {{ update_status.service_name }} -n 50</span></p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Portal browser preview</h2>
+        {% if portal_preview_available %}
+        <p class="help-text">This renders the captive portal through Playwright and shows the actual page after JavaScript runs.</p>
+        {% else %}
+        <p class="help-text">Portal preview is unavailable until <span class="mono">CAPTIVE_PORTAL_PREVIEW_CMD</span> is configured, or <span class="mono">CAPTIVE_PORTAL_ACK_CMD</span> points at <span class="mono">captive_portal_playwright.py</span>.</p>
+        {% endif %}
+        {% if portal_preview.updated_at_text %}
+        <p><strong>Captured:</strong> <span class="mono">{{ portal_preview.updated_at_text }}</span></p>
+        {% endif %}
+        {% if portal_preview.title %}
+        <p><strong>Page title:</strong> <span class="mono">{{ portal_preview.title }}</span></p>
+        {% endif %}
+        {% if portal_preview.url %}
+        <p><strong>Rendered URL:</strong> <span class="mono">{{ portal_preview.url }}</span></p>
+        {% endif %}
+        {% if portal_preview.reason %}
+        <p><strong>Analysis:</strong> <span class="mono">{{ portal_preview.reason }}</span></p>
+        {% endif %}
+        {% if portal_preview.recommended and portal_preview.recommended.text %}
+        <p><strong>Suggested button:</strong> <span class="mono">{{ portal_preview.recommended.text }}</span></p>
+        {% endif %}
+        {% if portal_preview.image_exists %}
+        <div class="overlay-preview portal-preview-shot">
+          <img src="{{ url_for('system.portal_preview_image') }}?ts={{ portal_preview.image_ts }}" alt="Captive portal browser preview">
+        </div>
+        {% else %}
+        <p class="help-text">No preview screenshot captured yet. Use <strong>Refresh portal preview</strong> after the Pi hits the captive portal.</p>
+        {% endif %}
+        {% if portal_preview.top_candidates %}
+        <div class="portal-candidate-list">
+          {% for item in portal_preview.top_candidates %}
+          <div class="portal-candidate-item {{ 'recommended' if item.recommended else '' }}">
+            <strong>{{ item.text }}</strong>
+            <span class="mono">score={{ item.score }}</span>
+            {% if item.disabled %}<span class="mono"> disabled</span>{% endif %}
+            <div class="help-text">{{ item.tag }}{% if item.type %} / {{ item.type }}{% endif %}{% if item.css_path %} · {{ item.css_path }}{% endif %}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <div class="card">
+        <h2>Portal live control</h2>
+        <p class="help-text">This keeps a Playwright page open on the Pi. The screenshot auto-refreshes, and clicks or key presses are sent back to that page.</p>
+        <p><strong>Target URL:</strong> <span id="portal-remote-target" class="mono">{{ portal_browser.target_url or '-' }}</span></p>
+        <p><strong>Current URL:</strong> <span id="portal-remote-url" class="mono">{{ portal_browser.current_url or '-' }}</span></p>
+        <p><strong>Status:</strong> <span id="portal-remote-status" class="mono">{{ portal_browser.message or portal_browser.last_error or ('session open' if portal_browser.session_open else 'idle') }}</span></p>
+        <div class="overlay-preview remote-browser-image">
+          {% if portal_browser.image_exists %}
+          <img id="portal-remote-image" src="{{ url_for('system.portal_remote_image') }}?ts={{ portal_browser.image_ts }}" alt="Portal live browser">
+          {% else %}
+          <img id="portal-remote-image" src="" alt="Portal live browser" class="is-hidden">
+          <p id="portal-remote-empty" class="help-text">Start the portal browser session to see a live screenshot here.</p>
+          {% endif %}
+        </div>
+        <div class="remote-browser-controls">
+          <div class="remote-browser-grid">
+            <button type="button" id="portal-remote-start">Start session</button>
+            <button type="button" id="portal-remote-reload" class="secondary-button">Reload</button>
+            <button type="button" id="portal-remote-stop" class="secondary-button">Stop</button>
+            <button type="button" id="portal-remote-refresh" class="secondary-button">Refresh image</button>
+          </div>
+          <div class="field-row">
+            <input id="portal-remote-text" type="text" placeholder="Type into the currently focused portal field">
+            <button type="button" id="portal-remote-type" class="secondary-button">Type</button>
+          </div>
+          <div class="remote-browser-grid">
+            <button type="button" class="secondary-button js-portal-key" data-key="Tab">Tab</button>
+            <button type="button" class="secondary-button js-portal-key" data-key="Enter">Enter</button>
+            <button type="button" class="secondary-button js-portal-key" data-key="Space">Space</button>
+            <button type="button" class="secondary-button js-portal-key" data-key="Backspace">Backspace</button>
+            <button type="button" class="secondary-button js-portal-scroll" data-delta="-500">Scroll Up</button>
+            <button type="button" class="secondary-button js-portal-scroll" data-delta="500">Scroll Down</button>
+          </div>
+          <p class="help-text">Click anywhere on the screenshot to send a click to that spot in the Pi browser viewport.</p>
+        </div>
+      </div>
+    </section>
+    {% elif current_page == 'stream' %}
+    <section class="stack">
       <div class="card">
         <h2>YouTube Live</h2>
         {% if not youtube_auth.client_configured %}
@@ -542,6 +720,12 @@
               <option value="{{ item.value }}" {% if (youtube_creation and youtube_creation.audio_mode == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.audio_mode == item.value) or ((not youtube_stream or not youtube_stream.audio_mode) and item.value == 'normal') %}selected{% endif %}>{{ item.label }}</option>
               {% endfor %}
             </select>
+            <label for="youtube-privacy-status">Privacy</label>
+            <select id="youtube-privacy-status" name="privacy_status">
+              {% for item in youtube_privacy_modes %}
+              <option value="{{ item.value }}" {% if (youtube_creation and youtube_creation.privacy_status == item.value) or ((not youtube_creation or youtube_creation.status != 'creating') and youtube_stream and youtube_stream.privacy_status == item.value) or ((not youtube_stream or not youtube_stream.privacy_status) and item.value == 'public') %}selected{% endif %}>{{ item.label }}</option>
+              {% endfor %}
+            </select>
             <label for="youtube-rotation">Rotation</label>
             <select id="youtube-rotation" name="rotation">
               {% for item in youtube_rotation_modes %}
@@ -556,30 +740,35 @@
             </select>
             <button type="submit" {% if not youtube_ready or (youtube_creation and youtube_creation.status == 'creating') %}disabled{% endif %}>Create stream</button>
           </form>
-          <p class="help-text">If overlay is enabled, the relay will transcode video so the HTML-rendered PNG can be composited.</p>
+          <p class="help-text">Proxy mode keeps the overlay stage alive. Turning overlay visibility off now swaps in a transparent frame instead of restarting the stream.</p>
         </div>
 
         <div class="card">
           <h2>Manage stream</h2>
           {% if youtube_stream %}
+          <p><strong>WiFi:</strong> <span class="mono">{{ youtube_dashboard.wifi_name }}</span></p>
+          <p><strong>RTMP:</strong> <span class="mono">{{ youtube_dashboard.rtmp_endpoint }}</span></p>
+          <p><strong>Params:</strong> <span class="mono">{{ youtube_dashboard.params }}</span></p>
+          <p><strong>IN:</strong> <span class="mono">{{ youtube_dashboard.input_resolution }}</span></p>
+          <p><strong>OUT:</strong> <span class="mono">{{ youtube_dashboard.output_resolution }}</span></p>
+          <p><strong>YouTube:</strong> <span class="mono">{{ youtube_dashboard.youtube_status }}</span>{% if youtube_dashboard.youtube_message %} <span class="help-text">{{ youtube_dashboard.youtube_message }}</span>{% endif %}</p>
+          <p><strong>Relay:</strong> <span class="mono">{{ youtube_dashboard.relay_status }}</span></p>
+          {% if youtube_dashboard.problems %}
+          <p><strong>Problems:</strong></p>
+          {% for item in youtube_dashboard.problems %}
+          <p class="help-text">{{ item }}</p>
+          {% endfor %}
+          {% endif %}
           <p><strong>Title:</strong> <span class="mono">{{ youtube_stream.title }}</span></p>
-          <p><strong>Privacy:</strong> <span class="mono">{{ youtube_stream.privacy_status or 'public' }}</span></p>
-          <p><strong>Mode:</strong> <span class="mono">{{ youtube_stream.mode }}</span></p>
           {% if youtube_stream.watch_url %}
           <p><strong>Watch:</strong> <a href="{{ youtube_stream.watch_url }}" target="_blank" rel="noreferrer">{{ youtube_stream.watch_url }}</a></p>
           {% endif %}
           {% if youtube_stream.proxy_publish_url %}
-          <p><strong>Publish URL:</strong> <span class="mono">{{ youtube_stream.proxy_publish_url }}</span></p>
           <p><strong>Relay target:</strong> <span class="mono">{{ youtube_stream.target_url }}</span></p>
           <p><strong>Relay listen:</strong> <span class="mono">{{ youtube_stream.proxy_listen_url }}</span></p>
-          <p><strong>Audio mode:</strong> <span class="mono">{{ youtube_stream.audio_mode_label }}</span></p>
-          <p><strong>Rotation:</strong> <span class="mono">{{ youtube_stream.rotation_label or 'Off' }}</span></p>
-          <p><strong>FPS:</strong> <span class="mono">{{ youtube_stream.fps_mode_label or 'Original' }}</span></p>
           {% if youtube_stream.relay %}
-          <p><strong>Relay status:</strong> <span class="mono">{{ youtube_stream.relay.status }}</span></p>
           <p><strong>Video encoder:</strong> <span class="mono">{{ youtube_stream.relay.video_encoder_label or youtube_stream.relay.video_encoder or 'copy' }}</span></p>
-          <p><strong>Video:</strong> <span class="mono">{% if youtube_stream.relay.video_width and youtube_stream.relay.video_height %}{{ youtube_stream.relay.video_width }}x{{ youtube_stream.relay.video_height }} ({{ youtube_stream.relay.video_orientation or 'unknown' }}){% else %}waiting for incoming stream{% endif %}</span></p>
-          <p><strong>Overlay:</strong> <span class="mono">{{ 'enabled' if youtube_stream.relay.overlay_enabled else 'disabled' }}</span></p>
+          <p><strong>Overlay:</strong> <span class="mono">{{ 'visible' if youtube_stream.relay.overlay_enabled else 'hidden' }}</span></p>
           <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
           {% endif %}
           <form method="post" action="/youtube/audio-mode">
@@ -610,15 +799,15 @@
         </div>
       </div>
     </section>
-
-    <section id="tab-overlay" class="tab-panel stack">
+    {% elif current_page == 'overlay' %}
+    <section class="stack">
       <div class="grid-2">
         <div class="card">
           <h2>Overlay config</h2>
           <form method="post" action="/overlay/save">
             <div class="checkbox-row">
               <input id="overlay-enabled" name="enabled" type="checkbox" {% if overlay.enabled %}checked{% endif %}>
-              <label for="overlay-enabled">Enable overlay in proxy relay</label>
+              <label for="overlay-enabled">Show overlay in stream</label>
             </div>
             <div class="grid-2">
               <div>
@@ -654,6 +843,7 @@
             </div>
           </form>
           <p class="help-text">Template is rendered server-side, then Chromium snapshots it to a transparent PNG.</p>
+          <p class="help-text">Visibility changes apply live. Position, size, and opacity changes still reload the relay because they alter the ffmpeg filter graph.</p>
           <p class="help-text">Useful variables: <span class="mono">ap_name</span>, <span class="mono">active.name</span>, <span class="mono">active.state</span>, <span class="mono">wlan0_ip</span>, <span class="mono">wlan1_ip</span>, <span class="mono">now_local</span>, <span class="mono">runtime</span>.</p>
         </div>
 
@@ -673,74 +863,51 @@
         </div>
       </div>
     </section>
-
-    <section id="tab-system" class="tab-panel stack">
-      <div class="grid-2">
-        <div class="card">
-          <h2>System status</h2>
-          <p><strong>AP name:</strong> <span class="mono">{{ ap_name }}</span></p>
-          <p><strong>wlan0 IP:</strong> <span class="mono">{{ wlan0_ip }}</span></p>
-          <p><strong>wlan1 IP:</strong> <span class="mono">{{ wlan1_ip }}</span></p>
-          {% if runtime.probe and runtime.probe.portal_capture and runtime.probe.portal_capture.html_path %}
-          <p><strong>Portal HTML:</strong> <span class="mono">{{ runtime.probe.portal_capture.html_path }}</span></p>
-          {% endif %}
-          {% if portal_ack_available %}
-          <form method="post" action="/portal-ack">
-            <button type="submit" class="secondary-button">Run portal action</button>
-          </form>
-          {% endif %}
-        </div>
-
-        <div class="card">
-          <h2>Software update</h2>
-          <p><strong>Script:</strong> <span class="mono">{{ update_status.script_path }}</span></p>
-          <p><strong>Update job:</strong> <span class="{{ update_status.status_class }}">{{ update_status.summary }}</span></p>
-          {% if update_status.last_started %}
-          <p><strong>Last start:</strong> <span class="mono">{{ update_status.last_started }}</span></p>
-          {% endif %}
-          <form method="post" action="/update">
-            <button type="submit" {% if not update_status.can_start %}disabled{% endif %}>{{ "Update running..." if update_status.running else "Run update script" }}</button>
-          </form>
-          <p class="help-text">Logs: <span class="mono">journalctl -u {{ update_status.service_name }} -n 50</span></p>
-        </div>
-      </div>
-    </section>
+    {% endif %}
   </div>
 
 <script>
+function syncWifiAuthUi() {
+  const authTypeInput = document.getElementById("auth_type");
+  const passwordInput = document.getElementById("password");
+  const passwordLabel = document.getElementById("password-label");
+  const passwordRow = document.getElementById("password-row");
+  const togglePassword = document.getElementById("toggle-password");
+  if (!authTypeInput || !passwordInput || !passwordLabel || !passwordRow || !togglePassword) {
+    return;
+  }
+  const isOpen = authTypeInput.value === "open";
+  passwordLabel.classList.toggle("is-hidden", isOpen);
+  passwordRow.classList.toggle("is-hidden", isOpen);
+  passwordInput.disabled = isOpen;
+  togglePassword.disabled = isOpen;
+  if (isOpen) {
+    passwordInput.type = "password";
+    togglePassword.textContent = "Show";
+  }
+}
+
 function prefillWifi(ssid, authType, password) {
   document.getElementById("ssid").value = ssid || "";
   document.getElementById("auth_type").value = authType || "wpa-psk";
   document.getElementById("password").value = password || "";
+  syncWifiAuthUi();
 
   const note = document.getElementById("prefill-note");
   if (note) {
     note.textContent = ssid
-      ? (password ? `Selected ${ssid}. Saved password loaded.` : `Selected ${ssid}. Enter the password if needed.`)
+      ? ((authType || "wpa-psk") === "open"
+          ? `Selected ${ssid}. Open network, no password needed.`
+          : (password ? `Selected ${ssid}. Saved password loaded.` : `Selected ${ssid}. Enter the password if needed.`))
       : "";
   }
 
-  document.getElementById("password").focus();
+  if ((authType || "wpa-psk") === "open") {
+    document.getElementById("auth_type").focus();
+  } else {
+    document.getElementById("password").focus();
+  }
 }
-
-function setActiveTab(tabId) {
-  document.querySelectorAll(".tab-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.tab === tabId);
-  });
-  document.querySelectorAll(".tab-panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.id === `tab-${tabId}`);
-  });
-  const url = new URL(window.location.href);
-  url.searchParams.set("tab", tabId);
-  window.history.replaceState({}, "", url);
-}
-
-document.querySelectorAll(".tab-button").forEach((button) => {
-  button.addEventListener("click", () => setActiveTab(button.dataset.tab));
-});
-
-const initialTab = new URLSearchParams(window.location.search).get("tab") || "wifi";
-setActiveTab(initialTab);
 
 const togglePassword = document.getElementById("toggle-password");
 if (togglePassword) {
@@ -750,6 +917,12 @@ if (togglePassword) {
     passwordInput.type = showPassword ? "text" : "password";
     togglePassword.textContent = showPassword ? "Hide" : "Show";
   });
+}
+
+const authTypeInput = document.getElementById("auth_type");
+if (authTypeInput) {
+  authTypeInput.addEventListener("change", syncWifiAuthUi);
+  syncWifiAuthUi();
 }
 
 async function copyTextToClipboard(text) {
@@ -858,9 +1031,148 @@ document.querySelectorAll(".js-prefill").forEach((element) => {
       element.dataset.authType || "wpa-psk",
       element.dataset.password || ""
     );
-    setActiveTab("wifi");
   });
 });
+
+const portalRemoteImage = document.getElementById("portal-remote-image");
+const portalRemoteEmpty = document.getElementById("portal-remote-empty");
+const portalRemoteStatus = document.getElementById("portal-remote-status");
+const portalRemoteUrl = document.getElementById("portal-remote-url");
+const portalRemoteTarget = document.getElementById("portal-remote-target");
+const portalRemoteText = document.getElementById("portal-remote-text");
+
+function portalRemoteSetStatus(payload) {
+  if (!portalRemoteStatus || !payload) {
+    return;
+  }
+  if (portalRemoteStatus) {
+    portalRemoteStatus.textContent = payload.message || payload.last_error || (payload.session_open ? "session open" : "idle");
+  }
+  if (portalRemoteUrl) {
+    portalRemoteUrl.textContent = payload.current_url || "-";
+  }
+  if (portalRemoteTarget) {
+    portalRemoteTarget.textContent = payload.target_url || "-";
+  }
+  if (portalRemoteImage) {
+    const hasImage = !!payload.image_exists;
+    portalRemoteImage.classList.toggle("is-hidden", !hasImage);
+    if (hasImage) {
+      portalRemoteImage.src = `/portal-remote/image?ts=${payload.image_ts || Date.now()}`;
+    }
+  }
+  if (portalRemoteEmpty) {
+    portalRemoteEmpty.classList.toggle("is-hidden", !!payload.image_exists);
+  }
+}
+
+async function portalRemoteRequest(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(payload || {}),
+  });
+  const data = await response.json();
+  portalRemoteSetStatus(data);
+  return data;
+}
+
+async function portalRemotePollStatus() {
+  if (!portalRemoteStatus) {
+    return;
+  }
+  try {
+    const response = await fetch("/portal-remote/status", {cache: "no-store"});
+    const data = await response.json();
+    portalRemoteSetStatus(data);
+  } catch (error) {
+    portalRemoteStatus.textContent = "Portal live control unavailable";
+  }
+}
+
+const portalRemoteStart = document.getElementById("portal-remote-start");
+if (portalRemoteStart) {
+  portalRemoteStart.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/start");
+  });
+}
+
+const portalRemoteReload = document.getElementById("portal-remote-reload");
+if (portalRemoteReload) {
+  portalRemoteReload.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/reload");
+  });
+}
+
+const portalRemoteStop = document.getElementById("portal-remote-stop");
+if (portalRemoteStop) {
+  portalRemoteStop.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/stop");
+  });
+}
+
+const portalRemoteRefresh = document.getElementById("portal-remote-refresh");
+if (portalRemoteRefresh) {
+  portalRemoteRefresh.addEventListener("click", async () => {
+    await portalRemotePollStatus();
+  });
+}
+
+const portalRemoteType = document.getElementById("portal-remote-type");
+if (portalRemoteType && portalRemoteText) {
+  portalRemoteType.addEventListener("click", async () => {
+    const text = portalRemoteText.value || "";
+    if (!text) {
+      return;
+    }
+    await portalRemoteRequest("/portal-remote/type", {text});
+    portalRemoteText.focus();
+    portalRemoteText.select();
+  });
+}
+
+if (portalRemoteText) {
+  portalRemoteText.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    const text = portalRemoteText.value || "";
+    if (!text) {
+      return;
+    }
+    await portalRemoteRequest("/portal-remote/type", {text});
+  });
+}
+
+document.querySelectorAll(".js-portal-key").forEach((element) => {
+  element.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/key", {key: element.dataset.key || ""});
+  });
+});
+
+document.querySelectorAll(".js-portal-scroll").forEach((element) => {
+  element.addEventListener("click", async () => {
+    await portalRemoteRequest("/portal-remote/scroll", {delta_y: Number(element.dataset.delta || "0")});
+  });
+});
+
+if (portalRemoteImage) {
+  portalRemoteImage.addEventListener("click", async (event) => {
+    const rect = portalRemoteImage.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return;
+    }
+    const xRatio = (event.clientX - rect.left) / rect.width;
+    const yRatio = (event.clientY - rect.top) / rect.height;
+    await portalRemoteRequest("/portal-remote/click", {x_ratio: xRatio, y_ratio: yRatio});
+  });
+}
+
+if (portalRemoteStatus) {
+  portalRemotePollStatus();
+  window.setInterval(portalRemotePollStatus, 3000);
+}
 </script>
 </body>
 </html>

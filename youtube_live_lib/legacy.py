@@ -18,6 +18,124 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .auth_service import (
+    client_ready as auth_client_ready,
+    ensure_access_token as auth_ensure_access_token,
+    get_auth_status as auth_get_auth_status,
+    make_api_request,
+    poll_device_authorization as auth_poll_device_authorization,
+    refresh_access_token as auth_refresh_access_token,
+    start_device_authorization as auth_start_device_authorization,
+    validate_live_access as auth_validate_live_access,
+)
+from .creation_service import (
+    create_stream_bundle as service_create_stream_bundle,
+    creation_in_progress as service_creation_in_progress,
+    run_creation_job as service_run_creation_job,
+    start_stream_creation as service_start_stream_creation,
+)
+from .config import (
+    CLIENT_CONFIG_PATH,
+    CREATION_LOG_PATH,
+    DEFAULT_OVERLAY_HTML,
+    DEFAULT_PROXY_AUDIO_MODE,
+    DEVICE_CODE_URL,
+    DEVICE_STATE_PATH,
+    FFMPEG_BIN,
+    OVERLAY_FRAME_INTERVAL_SEC,
+    OVERLAY_HTML_PATH,
+    OVERLAY_PNG_PATH,
+    OVERLAY_STATE_PATH,
+    PROXY_ENABLED,
+    PROXY_HW_VIDEO_BITRATE,
+    PROXY_HW_VIDEO_ENCODER,
+    PROXY_PUBLISH_URL_TEMPLATE,
+    PROXY_RTMP_APP,
+    PROXY_RTMP_PORT,
+    PROXY_VIDEO_CRF,
+    PROXY_VIDEO_ENCODER,
+    PROXY_VIDEO_PRESET,
+    PROXY_ZMQ_PORT,
+    RELAY_LOCK_PATH,
+    RELAY_LOG_PATH,
+    RELAY_START_TIMEOUT_SEC,
+    RELAY_STATE_PATH,
+    RELAY_STOP_TIMEOUT_SEC,
+    STREAM_CREATE_LOCK_PATH,
+    STREAM_CREATE_STATE_PATH,
+    STREAM_PRIVACY_STATUS,
+    STREAM_STATE_PATH,
+    STREAM_TITLE_PREFIX,
+    TOKEN_PATH,
+    TOKEN_URL,
+    YOUTUBE_API_BASE,
+    YOUTUBE_SCOPE,
+    ZMQ_LINGER,
+    ZMQ_RCVTIMEO,
+    ZMQ_REQ,
+    ZMQ_SNDTIMEO,
+)
+from .errors import YouTubeLiveError
+from .modes import (
+    AUDIO_MODE_SPECS,
+    FPS_MODE_SPECS,
+    ROTATION_MODE_SPECS,
+    audio_mode_spec,
+    decorate_audio_mode_fields,
+    decorate_fps_fields,
+    decorate_rotation_fields,
+    decorate_stream_state,
+    fps_mode_spec,
+    list_audio_modes,
+    list_fps_modes,
+    list_rotation_modes,
+    normalize_audio_mode,
+    normalize_fps_mode,
+    normalize_rotation_mode,
+    rotation_mode_spec,
+)
+from .relay_runtime import (
+    _run_overlay_feed as runtime_run_overlay_feed,
+    ensure_proxy_relay_running as runtime_ensure_proxy_relay_running,
+    refresh_proxy_overlay as runtime_refresh_proxy_overlay,
+    set_proxy_audio_mode as runtime_set_proxy_audio_mode,
+    set_proxy_fps_mode as runtime_set_proxy_fps_mode,
+    set_proxy_rotation_mode as runtime_set_proxy_rotation_mode,
+)
+from .storage import (
+    clear_creation_state as storage_clear_creation_state,
+    clear_device_state as storage_clear_device_state,
+    clear_relay_state as storage_clear_relay_state,
+    coerce_float,
+    coerce_int,
+    default_overlay_state as storage_default_overlay_state,
+    drop_json,
+    ensure_overlay_html_exists as storage_ensure_overlay_html_exists,
+    load_client_config as storage_load_client_config,
+    load_creation_log as storage_load_creation_log,
+    load_creation_state as storage_load_creation_state,
+    load_device_state as storage_load_device_state,
+    load_json,
+    load_overlay_state as storage_load_overlay_state,
+    load_relay_state as storage_load_relay_state,
+    load_stream_state as storage_load_stream_state,
+    load_token as storage_load_token,
+    normalize_client_config,
+    normalize_creation_state as storage_normalize_creation_state,
+    normalize_overlay_state as storage_normalize_overlay_state,
+    normalize_relay_state as storage_normalize_relay_state,
+    reset_creation_log as storage_reset_creation_log,
+    save_creation_state as storage_save_creation_state,
+    save_device_state as storage_save_device_state,
+    save_json,
+    save_overlay_state as storage_save_overlay_state,
+    save_relay_state as storage_save_relay_state,
+    save_stream_state as storage_save_stream_state,
+    save_token as storage_save_token,
+    update_creation_state as storage_update_creation_state,
+)
+from .youtube_api import api_request as youtube_api_request, http_form, http_json
+
 try:
     import fcntl
 except Exception:
@@ -28,608 +146,165 @@ try:
 except Exception:
     qrcode = None
 
-YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube"
-CLIENT_CONFIG_PATH = Path(os.environ.get("YOUTUBE_CLIENT_CONFIG_PATH", "/etc/rpi_ap_tools_youtube_client.json"))
-TOKEN_PATH = Path(os.environ.get("YOUTUBE_TOKEN_PATH", "/var/lib/rpi_ap_tools/youtube_token.json"))
-DEVICE_STATE_PATH = Path(os.environ.get("YOUTUBE_DEVICE_STATE_PATH", "/run/rpi_ap_tools_youtube_device.json"))
-STREAM_STATE_PATH = Path(os.environ.get("YOUTUBE_STREAM_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_stream.json"))
-STREAM_CREATE_STATE_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_STATE_PATH", "/run/rpi_ap_tools_youtube_create.json"))
-STREAM_CREATE_LOCK_PATH = Path(os.environ.get("YOUTUBE_STREAM_CREATE_LOCK_PATH", "/run/rpi_ap_tools_youtube_create.lock"))
-CREATION_LOG_PATH = Path(os.environ.get("YOUTUBE_CREATE_LOG_PATH", "/run/rpi_ap_tools_youtube_create.log"))
-RELAY_STATE_PATH = Path(os.environ.get("YOUTUBE_RELAY_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_relay.json"))
-RELAY_LOG_PATH = Path(os.environ.get("YOUTUBE_RELAY_LOG_PATH", "/run/rpi_ap_tools_youtube_relay.log"))
-RELAY_LOCK_PATH = Path(os.environ.get("YOUTUBE_RELAY_LOCK_PATH", "/run/rpi_ap_tools_youtube_relay.lock"))
-OVERLAY_STATE_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_STATE_PATH", "/var/lib/rpi_ap_tools/youtube_overlay.json"))
-OVERLAY_HTML_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_HTML_PATH", "/var/lib/rpi_ap_tools/youtube_overlay.html"))
-OVERLAY_PNG_PATH = Path(os.environ.get("YOUTUBE_OVERLAY_PNG_PATH", "/run/rpi_ap_tools_youtube_overlay.png"))
-STREAM_TITLE_PREFIX = os.environ.get("YOUTUBE_STREAM_TITLE_PREFIX", "RPi Live").strip() or "RPi Live"
-STREAM_PRIVACY_STATUS = os.environ.get("YOUTUBE_STREAM_PRIVACY_STATUS", "public").strip() or "public"
-PROXY_ENABLED = os.environ.get("YOUTUBE_PROXY_ENABLED", "1").strip().lower() not in ("0", "false", "no")
-PROXY_PUBLISH_URL_TEMPLATE = os.environ.get("YOUTUBE_PROXY_PUBLISH_URL", "").strip()
-PROXY_RTMP_PORT = int(os.environ.get("YOUTUBE_PROXY_RTMP_PORT", "1935") or "1935")
-PROXY_RTMP_APP = os.environ.get("YOUTUBE_PROXY_RTMP_APP", "live").strip().strip("/")
-PROXY_ZMQ_PORT = int(os.environ.get("YOUTUBE_PROXY_ZMQ_PORT", "5559") or "5559")
-FFMPEG_BIN = os.environ.get("YOUTUBE_PROXY_FFMPEG_BIN", "ffmpeg").strip() or "ffmpeg"
-DEFAULT_PROXY_AUDIO_MODE = "normal"
-DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
-TOKEN_URL = "https://oauth2.googleapis.com/token"
-YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 LOGGER = logging.getLogger(__name__)
-AUDIO_MODE_SPECS = {
-    "normal": {
-        "label": "Normal",
-        "short_label": "NORM",
-        "description": "Natural audio mix with live-switchable processing.",
-    },
-    "voice": {
-        "label": "Voice Focus",
-        "short_label": "VOICE",
-        "description": "Speech-focused band-pass and compression. This is not true vocal isolation.",
-    },
-    "mute": {
-        "label": "Mute",
-        "short_label": "MUTE",
-        "description": "Drop audio from the outgoing relay.",
-    },
-}
-ROTATION_MODE_SPECS = {
-    "0": {
-        "label": "Off",
-        "short_label": "OFF",
-        "description": "Keep the incoming video orientation unchanged.",
-        "transpose": None,
-    },
-    "90": {
-        "label": "Rotate 90",
-        "short_label": "R+90",
-        "description": "Rotate video 90 degrees clockwise before forwarding. The relay uses the Pi hardware encoder when available.",
-        "transpose": "1",
-    },
-    "-90": {
-        "label": "Rotate -90",
-        "short_label": "R-90",
-        "description": "Rotate video 90 degrees counter-clockwise before forwarding. The relay uses the Pi hardware encoder when available.",
-        "transpose": "2",
-    },
-}
-FPS_MODE_SPECS = {
-    "original": {
-        "label": "Original",
-        "short_label": "ORIG",
-        "description": "Keep the incoming frame rate unchanged.",
-        "fps": None,
-    },
-    "30": {
-        "label": "30 FPS",
-        "short_label": "30FPS",
-        "description": "Cap outgoing video at 30 fps.",
-        "fps": "30",
-    },
-    "20": {
-        "label": "20 FPS",
-        "short_label": "20FPS",
-        "description": "Cap outgoing video at 20 fps to reduce relay CPU load.",
-        "fps": "20",
-    },
-}
 if DEFAULT_PROXY_AUDIO_MODE not in AUDIO_MODE_SPECS:
-    DEFAULT_PROXY_AUDIO_MODE = "normal"
+    raise RuntimeError("DEFAULT_PROXY_AUDIO_MODE must be defined in AUDIO_MODE_SPECS")
 
 VIDEO_DIMENSION_RE = re.compile(r'(\d{2,5})x(\d{2,5})(?:\s|\[|,|$)')
 FFMPEG_BITRATE_RE = re.compile(r'bitrate=\s*([0-9.]+)\s*kbits/s')
 FFMPEG_SPEED_RE = re.compile(r'speed=\s*([0-9.]+)x')
 FFMPEG_ENCODER_RE = re.compile(r'^\s*[A-Z\.]+\s+([^\s]+)\s+', re.MULTILINE)
-PROXY_VIDEO_PRESET = os.environ.get("YOUTUBE_PROXY_VIDEO_PRESET", "veryfast").strip() or "veryfast"
-PROXY_VIDEO_CRF = str(os.environ.get("YOUTUBE_PROXY_VIDEO_CRF", "18") or "18").strip()
-PROXY_VIDEO_ENCODER = os.environ.get("YOUTUBE_PROXY_VIDEO_ENCODER", "auto").strip().lower() or "auto"
-PROXY_HW_VIDEO_ENCODER = os.environ.get("YOUTUBE_PROXY_HW_VIDEO_ENCODER", "h264_v4l2m2m").strip() or "h264_v4l2m2m"
-PROXY_HW_VIDEO_BITRATE = str(os.environ.get("YOUTUBE_PROXY_HW_VIDEO_BITRATE", "6000k") or "6000k").strip()
-OVERLAY_FRAME_INTERVAL_SEC = max(0.2, float(os.environ.get("YOUTUBE_OVERLAY_FRAME_INTERVAL_SEC", "1.0") or "1.0"))
-RELAY_START_TIMEOUT_SEC = max(1.0, float(os.environ.get("YOUTUBE_RELAY_START_TIMEOUT_SEC", "5.0") or "5.0"))
-RELAY_STOP_TIMEOUT_SEC = max(1.0, float(os.environ.get("YOUTUBE_RELAY_STOP_TIMEOUT_SEC", "5.0") or "5.0"))
-ZMQ_REQ = 3
-ZMQ_LINGER = 17
-ZMQ_RCVTIMEO = 27
-ZMQ_SNDTIMEO = 28
 _ENCODER_CACHE = None
-DEFAULT_OVERLAY_HTML = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <style>
-    html, body {
-      margin: 0;
-      width: 100%;
-      height: 100%;
-      background: transparent;
-      overflow: hidden;
-      font-family: "Segoe UI", Arial, sans-serif;
-    }
-    .overlay-root {
-      width: 100%;
-      height: 100%;
-      padding: 24px;
-      display: flex;
-      align-items: flex-start;
-      justify-content: flex-start;
-      box-sizing: border-box;
-    }
-    .panel {
-      min-width: 260px;
-      max-width: 420px;
-      padding: 18px 20px;
-      border-radius: 20px;
-      color: #f8fafc;
-      background: rgba(15, 23, 42, 0.64);
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      box-shadow: 0 18px 44px rgba(2, 6, 23, 0.35);
-      backdrop-filter: blur(12px);
-    }
-    .eyebrow {
-      font-size: 13px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: #93c5fd;
-    }
-    .title {
-      margin: 8px 0 4px;
-      font-size: 30px;
-      font-weight: 700;
-    }
-    .meta {
-      font-size: 15px;
-      color: #cbd5e1;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 16px;
-    }
-    .cell {
-      padding: 10px 12px;
-      border-radius: 14px;
-      background: rgba(15, 23, 42, 0.48);
-      border: 1px solid rgba(148, 163, 184, 0.2);
-    }
-    .label {
-      font-size: 12px;
-      color: #94a3b8;
-    }
-    .value {
-      margin-top: 4px;
-      font-size: 18px;
-      font-weight: 600;
-    }
-  </style>
-</head>
-<body>
-  <div class="overlay-root">
-    <div class="panel">
-      <div class="eyebrow">RPi Live Overlay</div>
-      <div class="title">{{ ap_name }}</div>
-      <div class="meta">{{ now_local }}</div>
-      <div class="grid">
-        <div class="cell">
-          <div class="label">Uplink</div>
-          <div class="value">{{ active.name or "none" }}</div>
-        </div>
-        <div class="cell">
-          <div class="label">State</div>
-          <div class="value">{{ active.state }}</div>
-        </div>
-        <div class="cell">
-          <div class="label">wlan0</div>
-          <div class="value">{{ wlan0_ip }}</div>
-        </div>
-        <div class="cell">
-          <div class="label">wlan1</div>
-          <div class="value">{{ wlan1_ip }}</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</body>
-</html>
-"""
-
-
-class YouTubeLiveError(RuntimeError):
-    pass
-
-
-def normalize_audio_mode(mode):
-    value = (mode or "").strip().lower()
-    return value if value in AUDIO_MODE_SPECS else DEFAULT_PROXY_AUDIO_MODE
-
-
-def audio_mode_spec(mode):
-    return AUDIO_MODE_SPECS[normalize_audio_mode(mode)]
-
-
-def list_audio_modes():
-    return [
-        {"value": value, **spec}
-        for value, spec in AUDIO_MODE_SPECS.items()
-    ]
-
-
-def normalize_rotation_mode(mode):
-    value = str(mode or "").strip()
-    return value if value in ROTATION_MODE_SPECS else "0"
-
-
-def rotation_mode_spec(mode):
-    return ROTATION_MODE_SPECS[normalize_rotation_mode(mode)]
-
-
-def list_rotation_modes():
-    return [
-        {"value": value, **spec}
-        for value, spec in ROTATION_MODE_SPECS.items()
-    ]
-
-
-def normalize_fps_mode(mode):
-    value = str(mode or "").strip().lower()
-    return value if value in FPS_MODE_SPECS else "original"
-
-
-def fps_mode_spec(mode):
-    return FPS_MODE_SPECS[normalize_fps_mode(mode)]
-
-
-def list_fps_modes():
-    return [
-        {"value": value, **spec}
-        for value, spec in FPS_MODE_SPECS.items()
-    ]
 
 
 def _decorate_audio_mode_fields(state, *, default_mode=None):
-    if not isinstance(state, dict) or not state:
-        return {}
-    payload = dict(state)
-    mode = normalize_audio_mode(payload.get("audio_mode") or default_mode or DEFAULT_PROXY_AUDIO_MODE)
-    spec = audio_mode_spec(mode)
-    payload["audio_mode"] = mode
-    payload["audio_mode_label"] = spec["label"]
-    payload["audio_mode_short"] = spec["short_label"]
-    payload["audio_mode_description"] = spec["description"]
-    return payload
+    return decorate_audio_mode_fields(state, default_mode=default_mode)
 
 
 def _decorate_rotation_fields(state, *, default_mode=None):
-    if not isinstance(state, dict) or not state:
-        return {}
-    payload = dict(state)
-    mode = normalize_rotation_mode(payload.get("rotation") or default_mode or "0")
-    spec = rotation_mode_spec(mode)
-    payload["rotation"] = mode
-    payload["rotation_label"] = spec["label"]
-    payload["rotation_short"] = spec["short_label"]
-    payload["rotation_description"] = spec["description"]
-    return payload
+    return decorate_rotation_fields(state, default_mode=default_mode)
 
 
 def _decorate_fps_fields(state, *, default_mode=None):
-    if not isinstance(state, dict) or not state:
-        return {}
-    payload = dict(state)
-    mode = normalize_fps_mode(payload.get("fps_mode") or default_mode or "original")
-    spec = fps_mode_spec(mode)
-    payload["fps_mode"] = mode
-    payload["fps_mode_label"] = spec["label"]
-    payload["fps_mode_short"] = spec["short_label"]
-    payload["fps_mode_description"] = spec["description"]
-    return payload
+    return decorate_fps_fields(state, default_mode=default_mode)
 
 
 def _decorate_stream_state(state, *, default_audio_mode=None, default_rotation=None, default_fps_mode=None):
-    payload = _decorate_audio_mode_fields(state, default_mode=default_audio_mode)
-    payload = _decorate_rotation_fields(payload, default_mode=default_rotation)
-    return _decorate_fps_fields(payload, default_mode=default_fps_mode)
+    return decorate_stream_state(
+        state,
+        default_audio_mode=default_audio_mode,
+        default_rotation=default_rotation,
+        default_fps_mode=default_fps_mode,
+    )
 
 
 def _load_json(path, default):
-    if not path.exists():
-        return default
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
-    return data if isinstance(data, type(default)) else default
+    return load_json(path, default)
 
 
 def _save_json(path, payload):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    temp_path.replace(path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    save_json(path, payload)
 
 
 def _drop_json(path):
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
+    drop_json(path)
 
 
 def _coerce_int(value, default, minimum=None, maximum=None):
-    try:
-        number = int(str(value).strip())
-    except (TypeError, ValueError, AttributeError):
-        number = default
-    if minimum is not None:
-        number = max(minimum, number)
-    if maximum is not None:
-        number = min(maximum, number)
-    return number
+    return coerce_int(value, default, minimum=minimum, maximum=maximum)
 
 
 def _coerce_float(value, default, minimum=None, maximum=None):
-    try:
-        number = float(str(value).strip())
-    except (TypeError, ValueError, AttributeError):
-        number = default
-    if minimum is not None:
-        number = max(minimum, number)
-    if maximum is not None:
-        number = min(maximum, number)
-    return number
+    return coerce_float(value, default, minimum=minimum, maximum=maximum)
 
 
 def default_overlay_state():
-    return {
-        "enabled": False,
-        "x": 36,
-        "y": 36,
-        "width": 420,
-        "height": 240,
-        "opacity": 1.0,
-        "refresh_sec": 10,
-        "html_path": str(OVERLAY_HTML_PATH),
-        "png_path": str(OVERLAY_PNG_PATH),
-        "renderer": "chromium",
-    }
+    return storage_default_overlay_state()
 
 
 def normalize_overlay_state(state):
-    payload = default_overlay_state()
-    if isinstance(state, dict):
-        payload.update(state)
-    payload["enabled"] = bool(payload.get("enabled"))
-    payload["x"] = _coerce_int(payload.get("x"), 36, minimum=0, maximum=3840)
-    payload["y"] = _coerce_int(payload.get("y"), 36, minimum=0, maximum=2160)
-    payload["width"] = _coerce_int(payload.get("width"), 420, minimum=32, maximum=3840)
-    payload["height"] = _coerce_int(payload.get("height"), 240, minimum=32, maximum=2160)
-    payload["opacity"] = _coerce_float(payload.get("opacity"), 1.0, minimum=0.0, maximum=1.0)
-    payload["refresh_sec"] = _coerce_int(payload.get("refresh_sec"), 10, minimum=5, maximum=3600)
-    payload["html_path"] = str(payload.get("html_path") or OVERLAY_HTML_PATH)
-    payload["png_path"] = str(payload.get("png_path") or OVERLAY_PNG_PATH)
-    payload["renderer"] = str(payload.get("renderer") or "chromium")
-    return payload
+    return storage_normalize_overlay_state(state)
 
 
 def load_overlay_state():
-    state = normalize_overlay_state(_load_json(OVERLAY_STATE_PATH, {}))
-    png_path = Path(state["png_path"])
-    html_path = Path(state["html_path"])
-    state["png_exists"] = png_path.is_file()
-    state["html_exists"] = html_path.is_file()
-    if state["png_exists"]:
-        try:
-            state["png_mtime"] = png_path.stat().st_mtime
-        except OSError:
-            state["png_mtime"] = 0
-    else:
-        state["png_mtime"] = 0
-    return state
+    return storage_load_overlay_state()
 
 
 def save_overlay_state(state):
-    _save_json(OVERLAY_STATE_PATH, normalize_overlay_state(state))
+    storage_save_overlay_state(state)
 
 
 def ensure_overlay_html_exists():
-    if OVERLAY_HTML_PATH.exists():
-        return
-    OVERLAY_HTML_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OVERLAY_HTML_PATH.write_text(DEFAULT_OVERLAY_HTML, encoding="utf-8")
+    storage_ensure_overlay_html_exists()
 
 
 def _http_json(url, *, method="GET", headers=None, data=None):
-    request = urllib.request.Request(url, method=method)
-    for key, value in (headers or {}).items():
-        request.add_header(key, value)
-    if data is not None:
-        encoded = json.dumps(data).encode("utf-8")
-        request.add_header("Content-Type", "application/json")
-    else:
-        encoded = None
-    try:
-        with urllib.request.urlopen(request, data=encoded, timeout=20) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="ignore")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"error": {"message": raw or str(exc)}}
-        message = payload.get("error", {}).get("message") or str(exc)
-        raise YouTubeLiveError(message) from exc
-    except urllib.error.URLError as exc:
-        raise YouTubeLiveError(str(exc.reason)) from exc
+    return http_json(url, method=method, headers=headers, data=data)
 
 
 def _http_form(url, fields):
-    encoded = urllib.parse.urlencode(fields).encode("utf-8")
-    request = urllib.request.Request(url, data=encoded, method="POST")
-    request.add_header("Content-Type", "application/x-www-form-urlencoded")
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="ignore")
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            payload = {"error": raw or str(exc)}
-        message = payload.get("error_description") or payload.get("error") or str(exc)
-        raise YouTubeLiveError(message) from exc
-    except urllib.error.URLError as exc:
-        raise YouTubeLiveError(str(exc.reason)) from exc
+    return http_form(url, fields)
 
 
 def _normalize_client_config(data):
-    if not isinstance(data, dict):
-        return {}
-    for key in ("web", "installed", "tv", "device"):
-        if isinstance(data.get(key), dict):
-            data = data[key]
-            break
-    client_id = str(data.get("client_id", "")).strip()
-    client_secret = str(data.get("client_secret", "")).strip()
-    return {"client_id": client_id, "client_secret": client_secret}
+    return normalize_client_config(data)
 
 
 def load_client_config():
-    config = _normalize_client_config(_load_json(CLIENT_CONFIG_PATH, {}))
-    if config.get("client_id"):
-        return config
-    env_client_id = os.environ.get("YOUTUBE_CLIENT_ID", "").strip()
-    env_client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET", "").strip()
-    if env_client_id:
-        return {"client_id": env_client_id, "client_secret": env_client_secret}
-    return {}
+    return storage_load_client_config()
 
 
 def load_token():
-    return _load_json(TOKEN_PATH, {})
+    return storage_load_token()
 
 
 def save_token(token):
-    _save_json(TOKEN_PATH, token)
+    storage_save_token(token)
 
 
 def load_device_state():
-    return _load_json(DEVICE_STATE_PATH, {})
+    return storage_load_device_state()
 
 
 def save_device_state(state):
-    _save_json(DEVICE_STATE_PATH, state)
+    storage_save_device_state(state)
 
 
 def clear_device_state():
-    _drop_json(DEVICE_STATE_PATH)
+    storage_clear_device_state()
 
 
 def load_stream_state():
-    state = _decorate_stream_state(
-        _load_json(STREAM_STATE_PATH, {}),
-        default_audio_mode="normal",
-        default_rotation="0",
-        default_fps_mode="original",
-    )
-    if state.get("mode") == "proxy":
-        state["audio_mode"] = normalize_audio_mode(state.get("audio_mode") or DEFAULT_PROXY_AUDIO_MODE)
-        state["rotation"] = normalize_rotation_mode(state.get("rotation"))
-        state["fps_mode"] = normalize_fps_mode(state.get("fps_mode"))
-        relay = load_relay_state()
-        if relay:
-            state["relay"] = relay
-            state = _decorate_stream_state(
-                state,
-                default_audio_mode=relay.get("audio_mode"),
-                default_rotation=relay.get("rotation"),
-                default_fps_mode=relay.get("fps_mode"),
-            )
-    return state
+    return storage_load_stream_state(load_relay_state_fn=load_relay_state)
 
 
 def save_stream_state(state):
-    _save_json(
-        STREAM_STATE_PATH,
-        _decorate_stream_state(state, default_audio_mode="normal", default_rotation="0", default_fps_mode="original"),
-    )
+    storage_save_stream_state(state)
 
 
 def load_relay_state():
-    return normalize_relay_state(_load_json(RELAY_STATE_PATH, {}))
-
-
-def save_relay_state(state):
-    _save_json(
-        RELAY_STATE_PATH,
-        _decorate_stream_state(
-            state,
-            default_audio_mode=DEFAULT_PROXY_AUDIO_MODE,
-            default_rotation="0",
-            default_fps_mode="original",
-        ),
+    return storage_load_relay_state(
+        populate_relay_video_fields=_populate_relay_video_fields,
+        relay_pid_matches=_relay_pid_matches,
     )
 
 
+def save_relay_state(state):
+    storage_save_relay_state(state)
+
+
 def clear_relay_state():
-    _drop_json(RELAY_STATE_PATH)
+    storage_clear_relay_state()
 
 
 def load_creation_state():
-    return normalize_creation_state(_load_json(STREAM_CREATE_STATE_PATH, {}))
+    return storage_load_creation_state(pid_alive=_pid_alive)
 
 
 def save_creation_state(state):
-    _save_json(STREAM_CREATE_STATE_PATH, state)
+    storage_save_creation_state(state)
 
 
 def clear_creation_state():
-    _drop_json(STREAM_CREATE_STATE_PATH)
+    storage_clear_creation_state()
 
 
 def update_creation_state(**fields):
-    state = load_creation_state()
-    state.update(fields)
-    save_creation_state(state)
+    storage_update_creation_state(fields=fields, pid_alive=_pid_alive)
 
 
 def reset_creation_log(*, ap_ip="-", title="", rotation="0", fps_mode="original", audio_mode="normal"):
-    CREATION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    header = [
-        f"[{datetime.now(timezone.utc).isoformat()}] stream creation requested",
-        f"ap_ip={ap_ip or '-'}",
-        f"title={title or '-'}",
-        f"audio_mode={normalize_audio_mode(audio_mode)}",
-        f"rotation={normalize_rotation_mode(rotation)}",
-        f"fps_mode={normalize_fps_mode(fps_mode)}",
-        "",
-    ]
-    CREATION_LOG_PATH.write_text("\n".join(header), encoding="utf-8")
+    storage_reset_creation_log(
+        ap_ip=ap_ip,
+        title=title,
+        rotation=rotation,
+        fps_mode=fps_mode,
+        audio_mode=audio_mode,
+    )
 
 
 def load_creation_log(max_bytes=262144):
-    if not CREATION_LOG_PATH.exists():
-        return {"path": str(CREATION_LOG_PATH), "text": "", "truncated": False}
-    try:
-        raw = CREATION_LOG_PATH.read_bytes()
-    except OSError:
-        return {"path": str(CREATION_LOG_PATH), "text": "", "truncated": False}
-
-    truncated = False
-    if max_bytes is not None and len(raw) > max_bytes:
-        raw = raw[-max_bytes:]
-        truncated = True
-    text = raw.decode("utf-8", errors="replace")
-    if truncated and "\n" in text:
-        text = text.split("\n", 1)[1]
-    if truncated:
-        text = "[earlier log truncated]\n" + text
-    return {"path": str(CREATION_LOG_PATH), "text": text, "truncated": truncated}
+    return storage_load_creation_log(max_bytes=max_bytes)
 
 
 def _pid_alive(pid):
@@ -754,40 +429,15 @@ def _relay_lock():
 
 
 def normalize_creation_state(state):
-    if not isinstance(state, dict):
-        return {}
-    if state.get("status") != "creating":
-        return state
-    pid = state.get("pid")
-    if pid and _pid_alive(pid):
-        return state
-    if pid:
-        state = dict(state)
-        state.setdefault("finished_at", time.time())
-        state["status"] = "error"
-        state["stage"] = "error"
-        state["message"] = state.get("message") or "Stream creation stopped"
-    return state
+    return storage_normalize_creation_state(state, pid_alive=_pid_alive)
 
 
 def normalize_relay_state(state):
-    if not isinstance(state, dict):
-        return {}
-    state = _decorate_stream_state(
+    return storage_normalize_relay_state(
         state,
-        default_audio_mode=DEFAULT_PROXY_AUDIO_MODE,
-        default_rotation="0",
-        default_fps_mode="original",
+        populate_relay_video_fields=_populate_relay_video_fields,
+        relay_pid_matches=_relay_pid_matches,
     )
-    state = _populate_relay_video_fields(state)
-    pid = state.get("pid")
-    if not pid:
-        return state
-    state["running"] = _relay_pid_matches(pid, state.get("listen_url", ""), state.get("target_url", ""))
-    if not state["running"] and state.get("status") == "running":
-        state["status"] = "stopped"
-        state.setdefault("stopped_at", time.time())
-    return state
 
 
 def _relay_orientation(width, height):
@@ -948,192 +598,248 @@ def _unlock_creation(fd):
 
 
 def client_ready():
-    return bool(load_client_config().get("client_id"))
+    return auth_client_ready(load_client_config_fn=load_client_config)
 
 
 def authorization_ready():
-    token = load_token()
-    return bool(token.get("refresh_token") or token.get("access_token"))
+    return bool(load_token().get("refresh_token") or load_token().get("access_token"))
 
 
 def validate_live_access():
-    if not authorization_ready():
-        return {
-            "ok": False,
-            "code": "not_authorized",
-            "message": "YouTube is not authorized yet",
-        }
-
-    try:
-        payload = _api_request(
-            "GET",
-            "liveBroadcasts",
-            params={
-                "part": "id,status",
-                "broadcastStatus": "all",
-                "maxResults": 1,
-            },
-        )
-        items = payload.get("items", [])
-        return {
-            "ok": True,
-            "code": "ok",
-            "message": "YouTube Live access verified",
-            "checked_at": time.time(),
-            "broadcast_count_hint": len(items),
-        }
-    except YouTubeLiveError as exc:
-        message = str(exc).strip() or "YouTube Live validation failed"
-        lowered = message.lower()
-        code = "api_error"
-        if "not authorized" in lowered or "unauthorized" in lowered:
-            code = "not_authorized"
-        elif "refresh token" in lowered or "invalid_grant" in lowered:
-            code = "token_expired"
-        elif "insufficient" in lowered or "scope" in lowered:
-            code = "scope_error"
-        elif "live streaming" in lowered or "live broadcast" in lowered:
-            code = "live_not_enabled"
-        return {
-            "ok": False,
-            "code": code,
-            "message": message,
-            "checked_at": time.time(),
-        }
+    return auth_validate_live_access(
+        authorization_ready_fn=authorization_ready,
+        api_request_fn=_api_request,
+    )
 
 
 def get_auth_status():
-    token = load_token()
-    device = load_device_state()
-    validation = {
-        "ok": False,
-        "code": "not_checked",
-        "message": "Authorization has not been verified yet",
-    }
-    if authorization_ready():
-        validation = validate_live_access()
-    return {
-        "client_configured": client_ready(),
-        "authorized": authorization_ready(),
-        "device_pending": bool(device.get("device_code")),
-        "device": device,
-        "token": {
-            "has_refresh_token": bool(token.get("refresh_token")),
-            "expires_at": token.get("expires_at"),
-        },
-        "validation": validation,
-        "creation": load_creation_state(),
-    }
+    return auth_get_auth_status(
+        load_token_fn=load_token,
+        load_device_state_fn=load_device_state,
+        client_ready_fn=client_ready,
+        authorization_ready_fn=authorization_ready,
+        validate_live_access_fn=validate_live_access,
+        load_creation_state_fn=load_creation_state,
+    )
 
 
 def start_device_authorization():
-    config = load_client_config()
-    if not config.get("client_id"):
-        raise YouTubeLiveError(f"Missing YouTube OAuth client config at {CLIENT_CONFIG_PATH}")
-    payload = _http_form(
-        DEVICE_CODE_URL,
-        {
-            "client_id": config["client_id"],
-            "scope": YOUTUBE_SCOPE,
-        },
+    return auth_start_device_authorization(
+        load_client_config_fn=load_client_config,
+        save_device_state_fn=save_device_state,
     )
-    state = {
-        "device_code": payload.get("device_code", ""),
-        "user_code": payload.get("user_code", ""),
-        "verification_url": payload.get("verification_url", ""),
-        "verification_url_complete": payload.get("verification_url_complete", ""),
-        "expires_at": time.time() + int(payload.get("expires_in", 0)),
-        "interval": int(payload.get("interval", 5)),
-        "started_at": time.time(),
-    }
-    save_device_state(state)
-    return state
 
 
 def poll_device_authorization():
-    config = load_client_config()
-    state = load_device_state()
-    if not config.get("client_id"):
-        raise YouTubeLiveError(f"Missing YouTube OAuth client config at {CLIENT_CONFIG_PATH}")
-    if not state.get("device_code"):
-        raise YouTubeLiveError("No device authorization is pending")
-    if state.get("expires_at", 0) <= time.time():
-        clear_device_state()
-        raise YouTubeLiveError("Device authorization code expired")
-
-    fields = {
-        "client_id": config["client_id"],
-        "device_code": state["device_code"],
-        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-    }
-    if config.get("client_secret"):
-        fields["client_secret"] = config["client_secret"]
-    try:
-        payload = _http_form(TOKEN_URL, fields)
-    except YouTubeLiveError as exc:
-        message = str(exc)
-        if any(code in message for code in ("authorization_pending", "slow_down")):
-            raise
-        clear_device_state()
-        raise
-
-    token = {
-        "access_token": payload.get("access_token", ""),
-        "refresh_token": payload.get("refresh_token", load_token().get("refresh_token", "")),
-        "scope": payload.get("scope", YOUTUBE_SCOPE),
-        "token_type": payload.get("token_type", "Bearer"),
-        "expires_at": time.time() + int(payload.get("expires_in", 3600)) - 60,
-    }
-    save_token(token)
-    clear_device_state()
-    return token
+    return auth_poll_device_authorization(
+        load_client_config_fn=load_client_config,
+        load_device_state_fn=load_device_state,
+        clear_device_state_fn=clear_device_state,
+        load_token_fn=load_token,
+        save_token_fn=save_token,
+    )
 
 
 def _refresh_access_token(token):
-    config = load_client_config()
-    if not config.get("client_id"):
-        raise YouTubeLiveError(f"Missing YouTube OAuth client config at {CLIENT_CONFIG_PATH}")
-    if not token.get("refresh_token"):
-        raise YouTubeLiveError("No YouTube refresh token available")
-    fields = {
-        "client_id": config["client_id"],
-        "refresh_token": token["refresh_token"],
-        "grant_type": "refresh_token",
-    }
-    if config.get("client_secret"):
-        fields["client_secret"] = config["client_secret"]
-    payload = _http_form(TOKEN_URL, fields)
-    token["access_token"] = payload.get("access_token", "")
-    token["token_type"] = payload.get("token_type", "Bearer")
-    token["expires_at"] = time.time() + int(payload.get("expires_in", 3600)) - 60
-    save_token(token)
-    return token
+    return auth_refresh_access_token(
+        token=token,
+        load_client_config_fn=load_client_config,
+        save_token_fn=save_token,
+    )
 
 
 def ensure_access_token():
-    token = load_token()
-    if not token:
-        raise YouTubeLiveError("YouTube is not authorized yet")
-    if token.get("access_token") and token.get("expires_at", 0) > time.time():
-        return token["access_token"]
-    token = _refresh_access_token(token)
-    if not token.get("access_token"):
-        raise YouTubeLiveError("Failed to refresh YouTube access token")
-    return token["access_token"]
+    return auth_ensure_access_token(
+        load_token_fn=load_token,
+        refresh_access_token_fn=_refresh_access_token,
+    )
 
 
 def _api_request(method, path, *, params=None, body=None):
-    access_token = ensure_access_token()
-    query = urllib.parse.urlencode(params or {})
-    url = f"{YOUTUBE_API_BASE}/{path}"
-    if query:
-        url = f"{url}?{query}"
-    return _http_json(
-        url,
-        method=method,
-        headers={"Authorization": f"Bearer {access_token}"},
-        data=body,
+    return youtube_api_request(
+        method,
+        path,
+        ensure_access_token_fn=ensure_access_token,
+        params=params,
+        body=body,
     )
+
+
+def get_stream_monitor_status():
+    state = load_stream_state()
+    if not state:
+        return {
+            "ok": False,
+            "code": "no_stream",
+            "summary": "NO STREAM",
+            "message": "No YouTube stream has been created yet.",
+            "issues": [],
+        }
+
+    issues = []
+    payload = {
+        "ok": True,
+        "code": "unknown",
+        "summary": "UNKNOWN",
+        "message": "",
+        "issues": issues,
+        "broadcast_id": state.get("broadcast_id", ""),
+        "stream_id": state.get("stream_id", ""),
+        "watch_url": state.get("watch_url", ""),
+        "broadcast": {},
+        "stream": {},
+    }
+
+    if not authorization_ready():
+        payload.update(
+            {
+                "ok": False,
+                "code": "not_authorized",
+                "summary": "AUTH REQUIRED",
+                "message": "YouTube is not authorized.",
+            }
+        )
+        return payload
+
+    try:
+        broadcast_id = state.get("broadcast_id", "")
+        if broadcast_id:
+            response = _api_request(
+                "GET",
+                "liveBroadcasts",
+                params={"part": "id,snippet,status,contentDetails", "id": broadcast_id},
+            )
+            items = response.get("items", [])
+            if items:
+                item = items[0]
+                status = item.get("status") or {}
+                snippet = item.get("snippet") or {}
+                life_cycle = (status.get("lifeCycleStatus") or "").strip()
+                payload["broadcast"] = {
+                    "id": item.get("id", ""),
+                    "life_cycle_status": life_cycle,
+                    "privacy_status": status.get("privacyStatus", ""),
+                    "recording_status": status.get("recordingStatus", ""),
+                    "made_for_kids": status.get("selfDeclaredMadeForKids"),
+                    "scheduled_start_time": snippet.get("scheduledStartTime", ""),
+                    "actual_start_time": snippet.get("actualStartTime", ""),
+                    "actual_end_time": snippet.get("actualEndTime", ""),
+                }
+            else:
+                issues.append("Broadcast not found on YouTube.")
+                payload["ok"] = False
+                payload["code"] = "broadcast_missing"
+                payload["summary"] = "BROADCAST MISSING"
+                payload["message"] = "The saved YouTube broadcast no longer exists."
+
+        stream_id = state.get("stream_id", "")
+        if stream_id:
+            response = _api_request(
+                "GET",
+                "liveStreams",
+                params={"part": "id,status,cdn", "id": stream_id},
+            )
+            items = response.get("items", [])
+            if items:
+                item = items[0]
+                status = item.get("status") or {}
+                health_status = status.get("healthStatus") or {}
+                configuration_issues = health_status.get("configurationIssues") or []
+                issue_messages = []
+                for issue in configuration_issues:
+                    if not isinstance(issue, dict):
+                        continue
+                    issue_messages.append(
+                        (issue.get("description") or issue.get("reason") or issue.get("type") or "Unknown stream issue").strip()
+                    )
+                payload["stream"] = {
+                    "id": item.get("id", ""),
+                    "stream_status": (status.get("streamStatus") or "").strip(),
+                    "health_status": (health_status.get("status") or "").strip(),
+                    "issues": issue_messages,
+                }
+                issues.extend(issue_messages)
+            else:
+                issues.append("Stream target not found on YouTube.")
+                payload["ok"] = False
+                payload["code"] = "stream_missing"
+                payload["summary"] = "STREAM MISSING"
+                payload["message"] = "The saved YouTube stream target no longer exists."
+    except YouTubeLiveError as exc:
+        payload.update(
+            {
+                "ok": False,
+                "code": "api_error",
+                "summary": "YOUTUBE ERROR",
+                "message": str(exc),
+            }
+        )
+        return payload
+
+    if payload["code"] in ("broadcast_missing", "stream_missing"):
+        return payload
+
+    life_cycle = (payload["broadcast"].get("life_cycle_status") or "").lower()
+    stream_status = (payload["stream"].get("stream_status") or "").lower()
+    health_status = (payload["stream"].get("health_status") or "").lower()
+
+    if life_cycle in ("complete", "complete_starting", "revoked"):
+        payload.update(
+            {
+                "ok": False,
+                "code": "broadcast_finished",
+                "summary": "FINISHED",
+                "message": "YouTube broadcast has already finished. Create a new stream.",
+            }
+        )
+    elif life_cycle == "live":
+        payload.update(
+            {
+                "ok": True,
+                "code": "live",
+                "summary": "LIVE" if stream_status == "active" else "LIVE WAITING",
+                "message": "Broadcast is live on YouTube." if stream_status == "active" else "Broadcast is live but stream input is not active.",
+            }
+        )
+    elif life_cycle in ("ready", "teststarting", "testing", "created"):
+        payload.update(
+            {
+                "ok": True if stream_status in ("active", "created", "ready") else False,
+                "code": "ready",
+                "summary": "READY",
+                "message": "Broadcast is ready on YouTube." if stream_status != "inactive" else "Broadcast exists, but YouTube is not receiving an active stream.",
+            }
+        )
+    elif not life_cycle and stream_status == "active":
+        payload.update(
+            {
+                "ok": True,
+                "code": "stream_active",
+                "summary": "STREAM ACTIVE",
+                "message": "YouTube stream target is active.",
+            }
+        )
+    else:
+        payload.update(
+            {
+                "ok": False if stream_status == "inactive" else payload["ok"],
+                "code": "inactive" if stream_status == "inactive" else "unknown",
+                "summary": "INACTIVE" if stream_status == "inactive" else "UNKNOWN",
+                "message": "YouTube is not receiving an active stream." if stream_status == "inactive" else "Unable to determine YouTube stream state.",
+            }
+        )
+
+    if health_status and health_status not in ("good", "ok"):
+        issues.append(f"YouTube stream health: {health_status}.")
+        payload["ok"] = False
+        if payload["code"] in ("live", "ready", "stream_active"):
+            payload["summary"] = "HEALTH WARN"
+
+    relay = state.get("relay") or {}
+    if relay.get("warning"):
+        issues.append(relay.get("warning"))
+
+    return payload
 
 
 def _default_stream_title():
@@ -2041,8 +1747,66 @@ def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None
 
 
 def creation_in_progress():
-    state = load_creation_state()
-    return state.get("status") == "creating"
+    return service_creation_in_progress()
+
+
+def create_stream_bundle(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None):
+    return service_create_stream_bundle(
+        api_request_fn=_api_request,
+        ap_ip=ap_ip,
+        title=title,
+        rotation=rotation,
+        fps_mode=fps_mode,
+        audio_mode=audio_mode,
+    )
+
+
+def _run_creation_job(ap_ip, title, rotation, fps_mode, audio_mode, privacy_status):
+    return service_run_creation_job(
+        api_request_fn=_api_request,
+        ap_ip=ap_ip,
+        title=title,
+        rotation=rotation,
+        fps_mode=fps_mode,
+        audio_mode=audio_mode,
+        privacy_status=privacy_status,
+    )
+
+
+def start_stream_creation(*, ap_ip="-", title=None, rotation=None, fps_mode=None, audio_mode=None, privacy_status=None):
+    return service_start_stream_creation(
+        validate_live_access_fn=validate_live_access,
+        ap_ip=ap_ip,
+        title=title,
+        rotation=rotation,
+        fps_mode=fps_mode,
+        audio_mode=audio_mode,
+        privacy_status=privacy_status,
+    )
+
+
+def ensure_proxy_relay_running():
+    return runtime_ensure_proxy_relay_running()
+
+
+def refresh_proxy_overlay():
+    return runtime_refresh_proxy_overlay()
+
+
+def set_proxy_audio_mode(mode):
+    return runtime_set_proxy_audio_mode(mode)
+
+
+def set_proxy_rotation_mode(mode):
+    return runtime_set_proxy_rotation_mode(mode)
+
+
+def set_proxy_fps_mode(mode):
+    return runtime_set_proxy_fps_mode(mode)
+
+
+def _run_overlay_feed(png_path, interval):
+    return runtime_run_overlay_feed(png_path, interval)
 
 
 def qr_data_uri(payload):
@@ -2061,6 +1825,7 @@ def _parse_cli_args(argv):
     audio_mode = DEFAULT_PROXY_AUDIO_MODE
     rotation = "0"
     fps_mode = "original"
+    privacy_status = None
     idx = 0
     while idx < len(argv):
         item = argv[idx]
@@ -2084,6 +1849,10 @@ def _parse_cli_args(argv):
             fps_mode = argv[idx + 1]
             idx += 2
             continue
+        if item == "--privacy-status" and idx + 1 < len(argv):
+            privacy_status = argv[idx + 1]
+            idx += 2
+            continue
         idx += 1
     return (
         ap_ip,
@@ -2091,6 +1860,7 @@ def _parse_cli_args(argv):
         normalize_audio_mode(audio_mode),
         normalize_rotation_mode(rotation),
         normalize_fps_mode(fps_mode),
+        privacy_status,
     )
 
 
@@ -2133,8 +1903,8 @@ def _run_overlay_feed(png_path, interval):
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "create":
         logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s %(levelname)s %(message)s", force=True)
-        cli_ap_ip, cli_title, cli_audio_mode, cli_rotation, cli_fps_mode = _parse_cli_args(sys.argv[2:])
-        _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode, cli_audio_mode)
+        cli_ap_ip, cli_title, cli_audio_mode, cli_rotation, cli_fps_mode, cli_privacy_status = _parse_cli_args(sys.argv[2:])
+        _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode, cli_audio_mode, cli_privacy_status)
     elif len(sys.argv) >= 2 and sys.argv[1] == "overlay-feed":
         cli_png_path, cli_interval = _parse_overlay_feed_args(sys.argv[2:])
         _run_overlay_feed(cli_png_path, cli_interval)

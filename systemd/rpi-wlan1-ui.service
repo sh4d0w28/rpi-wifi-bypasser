@@ -11,6 +11,7 @@ Restart=always
 RestartSec=2
 User=root
 Environment=FLASK_SECRET=rpi-ap-tools
+EnvironmentFile=-/etc/default/rpi_ap_tools_portal
 
 [Install]
 WantedBy=multi-user.target

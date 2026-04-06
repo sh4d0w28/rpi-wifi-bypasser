@@ -10,6 +10,7 @@ Restart=always
 RestartSec=2
 User=root
 Environment=WAVESHARE_LCD_PATH=/home/pi/1.44inch-LCD-HAT-Code/RaspberryPi/python
+EnvironmentFile=-/etc/default/rpi_ap_tools_portal
 
 [Install]
 WantedBy=multi-user.target

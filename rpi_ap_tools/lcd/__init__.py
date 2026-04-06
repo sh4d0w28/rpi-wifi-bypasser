@@ -1,0 +1,2 @@
+"""LCD status application package."""
+

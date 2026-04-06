@@ -2,6 +2,11 @@
 import logging
 import os
 import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from youtube_live_lib import (
     DEFAULT_OVERLAY_HTML,
@@ -14,6 +19,7 @@ from youtube_live_lib import (
     ensure_overlay_html_exists,
     ensure_proxy_relay_running,
     get_auth_status,
+    get_stream_monitor_status,
     list_audio_modes,
     list_fps_modes,
     list_rotation_modes,
@@ -41,6 +47,7 @@ __all__ = [
     "ensure_overlay_html_exists",
     "ensure_proxy_relay_running",
     "get_auth_status",
+    "get_stream_monitor_status",
     "list_audio_modes",
     "list_fps_modes",
     "list_rotation_modes",
@@ -66,6 +73,7 @@ def _parse_cli_args(argv):
     audio_mode = "normal"
     rotation = "0"
     fps_mode = "original"
+    privacy_status = None
     idx = 0
     while idx < len(argv):
         item = argv[idx]
@@ -89,6 +97,10 @@ def _parse_cli_args(argv):
             fps_mode = argv[idx + 1]
             idx += 2
             continue
+        if item == "--privacy-status" and idx + 1 < len(argv):
+            privacy_status = argv[idx + 1]
+            idx += 2
+            continue
         idx += 1
     return (
         ap_ip,
@@ -96,6 +108,7 @@ def _parse_cli_args(argv):
         normalize_audio_mode(audio_mode),
         normalize_rotation_mode(rotation),
         normalize_fps_mode(fps_mode),
+        privacy_status,
     )
 
 
@@ -128,8 +141,8 @@ if __name__ == "__main__":
             format="%(asctime)s %(levelname)s %(message)s",
             force=True,
         )
-        cli_ap_ip, cli_title, cli_audio_mode, cli_rotation, cli_fps_mode = _parse_cli_args(sys.argv[2:])
-        _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode, cli_audio_mode)
+        cli_ap_ip, cli_title, cli_audio_mode, cli_rotation, cli_fps_mode, cli_privacy_status = _parse_cli_args(sys.argv[2:])
+        _run_creation_job(cli_ap_ip, cli_title, cli_rotation, cli_fps_mode, cli_audio_mode, cli_privacy_status)
     elif len(sys.argv) >= 2 and sys.argv[1] == "overlay-feed":
         cli_png_path, cli_interval = _parse_overlay_feed_args(sys.argv[2:])
         _run_overlay_feed(cli_png_path, cli_interval)
