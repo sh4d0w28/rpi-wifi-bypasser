@@ -769,7 +769,9 @@
           {% if youtube_stream.relay %}
           <p><strong>Video encoder:</strong> <span class="mono">{{ youtube_stream.relay.video_encoder_label or youtube_stream.relay.video_encoder or 'copy' }}</span></p>
           <p><strong>Overlay:</strong> <span class="mono">{{ 'visible' if youtube_stream.relay.overlay_enabled else 'hidden' }}</span></p>
+          <p><strong>Listener clients:</strong> <span class="mono">{{ youtube_stream.relay.listener_client_count or 0 }}</span></p>
           <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
+          <p><strong>Listener log:</strong> <span class="mono">{{ youtube_stream.relay.listener_log_path }}</span></p>
           {% endif %}
           <form method="post" action="/youtube/audio-mode">
             <div class="button-row">

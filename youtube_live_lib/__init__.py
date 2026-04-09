@@ -1,4 +1,4 @@
-"""Structured entrypoints over the legacy YouTube live implementation."""
+"""Structured entrypoints for YouTube live support."""
 
 from .auth import get_auth_status, poll_device_authorization, start_device_authorization
 from .common import (
@@ -16,9 +16,10 @@ from .common import (
     qr_data_uri,
 )
 from .creation import _run_creation_job, load_creation_log, load_creation_state, start_stream_creation
-from .legacy import get_stream_monitor_status
+from .monitor import get_stream_monitor_status
 from .relay import (
     _coerce_float,
+    _run_listener_monitor,
     _run_overlay_feed,
     ensure_proxy_relay_running,
     load_overlay_state,
@@ -36,6 +37,7 @@ __all__ = [
     "OVERLAY_PNG_PATH",
     "YouTubeLiveError",
     "_coerce_float",
+    "_run_listener_monitor",
     "_run_creation_job",
     "_run_overlay_feed",
     "ensure_overlay_html_exists",

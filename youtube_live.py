@@ -15,6 +15,7 @@ from youtube_live_lib import (
     YouTubeLiveError,
     _coerce_float,
     _run_creation_job,
+    _run_listener_monitor,
     _run_overlay_feed as _relay_overlay_feed,
     ensure_overlay_html_exists,
     ensure_proxy_relay_running,
@@ -134,6 +135,29 @@ def _run_overlay_feed(png_path, interval):
     _relay_overlay_feed(png_path, interval)
 
 
+def _parse_listener_monitor_args(argv):
+    port = 1935
+    ingress_pid = 0
+    log_path = ""
+    idx = 0
+    while idx < len(argv):
+        item = argv[idx]
+        if item == "--port" and idx + 1 < len(argv):
+            port = int(argv[idx + 1])
+            idx += 2
+            continue
+        if item == "--ingress-pid" and idx + 1 < len(argv):
+            ingress_pid = int(argv[idx + 1])
+            idx += 2
+            continue
+        if item == "--log" and idx + 1 < len(argv):
+            log_path = argv[idx + 1]
+            idx += 2
+            continue
+        idx += 1
+    return port, ingress_pid, log_path
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "create":
         logging.basicConfig(
@@ -146,3 +170,6 @@ if __name__ == "__main__":
     elif len(sys.argv) >= 2 and sys.argv[1] == "overlay-feed":
         cli_png_path, cli_interval = _parse_overlay_feed_args(sys.argv[2:])
         _run_overlay_feed(cli_png_path, cli_interval)
+    elif len(sys.argv) >= 2 and sys.argv[1] == "listener-monitor":
+        cli_port, cli_ingress_pid, cli_log_path = _parse_listener_monitor_args(sys.argv[2:])
+        _run_listener_monitor(cli_port, cli_ingress_pid, cli_log_path)

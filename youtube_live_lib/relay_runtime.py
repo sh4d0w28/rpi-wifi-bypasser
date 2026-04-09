@@ -24,6 +24,7 @@ from .config import (
     PROXY_ENABLED,
     PROXY_HW_VIDEO_BITRATE,
     PROXY_HW_VIDEO_ENCODER,
+    PROXY_INGRESS_LOGLEVEL,
     PROXY_INTERNAL_UDP_PORT,
     PROXY_PUBLISH_URL_TEMPLATE,
     PROXY_RTMP_APP,
@@ -33,6 +34,7 @@ from .config import (
     PROXY_VIDEO_PRESET,
     PROXY_ZMQ_PORT,
     RELAY_EGRESS_LOG_PATH,
+    RELAY_LISTENER_LOG_PATH,
     RELAY_LOCK_PATH,
     RELAY_LOG_PATH,
     RELAY_STATE_PATH,
@@ -148,6 +150,31 @@ def _relay_port_listening(port, pid=None):
     return False
 
 
+def _ss_connections(port):
+    if not port:
+        return []
+    try:
+        proc = subprocess.run(["ss", "-tn"], text=True, capture_output=True, check=False, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    token = f":{int(port)}"
+    connections = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line or line.startswith("State") or token not in line:
+            continue
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        local_addr = parts[3]
+        if not local_addr.endswith(token):
+            continue
+        connections.append({"state": parts[0], "local_addr": local_addr, "peer_addr": parts[4]})
+    return connections
+
+
 def _tail_log_text(path, max_bytes=4096):
     if not path:
         return ""
@@ -161,6 +188,14 @@ def _tail_log_text(path, max_bytes=4096):
     if max_bytes and len(raw) > max_bytes:
         raw = raw[-max_bytes:]
     return raw.decode("utf-8", errors="ignore").strip()
+
+
+def _append_listener_log_line(path, message):
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    log_path = Path(path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"[{timestamp}] {message}\n")
 
 
 def _wait_pid_exit(pid, timeout_sec):
@@ -367,6 +402,11 @@ def _compose_relay_state(*, ingress, egress, stream_title="", audio_mode=None, r
             "overlay": ingress.get("overlay") or overlay or {},
             "overlay_enabled": bool((ingress.get("overlay") or overlay or {}).get("enabled")),
             "overlay_feed_pid": ingress.get("overlay_feed_pid", 0),
+            "listener_monitor_pid": ingress.get("listener_monitor_pid", 0),
+            "listener_log_path": ingress.get("listener_log_path", ""),
+            "listener_clients": ingress.get("listener_clients") or [],
+            "listener_client_count": ingress.get("listener_client_count", 0),
+            "listener_last_event_at": ingress.get("listener_last_event_at", 0),
             "internal_output_url": ingress.get("output_url", ""),
             "internal_input_url": egress.get("input_url", _proxy_internal_input_url()),
             "warning": ingress.get("warning") or egress.get("warning") or "",
@@ -389,6 +429,11 @@ def load_relay_state():
         return {}
     ingress = _normalize_process_state(raw.get("ingress") or {}, check_fn=_ingress_running)
     egress = _normalize_process_state(raw.get("egress") or {}, check_fn=_egress_running)
+    listen_port = _listen_port_from_url(ingress.get("listen_url", ""))
+    listener_clients = _ss_connections(listen_port)
+    ingress["listener_clients"] = listener_clients
+    ingress["listener_client_count"] = len(listener_clients)
+    ingress.setdefault("listener_log_path", str(RELAY_LISTENER_LOG_PATH))
     return _compose_relay_state(
         ingress=ingress,
         egress=egress,
@@ -452,7 +497,7 @@ def _proxy_ingress_argv(*, listen_url, audio_mode, rotation, fps_mode, overlay=N
     fps_spec = fps_mode_spec(fps_mode)
     overlay = normalize_overlay_state(overlay or {})
     overlay_active = bool(overlay_fd is not None and overlay.get("png_path"))
-    argv = [FFMPEG_BIN, "-hide_banner", "-loglevel", "info", "-stats", "-listen", "1", "-i", listen_url]
+    argv = [FFMPEG_BIN, "-hide_banner", "-loglevel", PROXY_INGRESS_LOGLEVEL, "-stats", "-listen", "1", "-i", listen_url]
     if overlay_active:
         argv.extend(["-thread_queue_size", "8", "-f", "image2pipe", "-framerate", "1", "-c:v", "png", "-i", f"pipe:{overlay_fd}"])
     video_filters = []
@@ -663,9 +708,11 @@ def _stop_proxy_ingress_unlocked(relay=None):
     relay = relay or load_relay_state()
     ingress = (relay or {}).get("ingress") or relay or {}
     overlay_feed_pid = ingress.get("overlay_feed_pid") or relay.get("overlay_feed_pid")
+    listener_monitor_pid = ingress.get("listener_monitor_pid") or relay.get("listener_monitor_pid")
     port = _listen_port_from_url(ingress.get("listen_url", "") or relay.get("listen_url", ""))
     _stop_process(ingress.get("pid") or relay.get("pid"), RELAY_STOP_TIMEOUT_SEC)
     _stop_process(overlay_feed_pid, 1.5)
+    _stop_process(listener_monitor_pid, 1.5)
     _wait_port_release(port, timeout_sec=RELAY_STOP_TIMEOUT_SEC)
 
 
@@ -690,6 +737,28 @@ def _start_overlay_feed(png_path):
         argv,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=True,
+    )
+
+
+def _start_listener_monitor(port, ingress_pid):
+    argv = [
+        sys.executable,
+        str(Path(__file__).resolve().parent.parent / "youtube_live.py"),
+        "listener-monitor",
+        "--port",
+        str(port),
+        "--ingress-pid",
+        str(ingress_pid),
+        "--log",
+        str(RELAY_LISTENER_LOG_PATH),
+    ]
+    return subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         close_fds=True,
         start_new_session=True,
@@ -758,6 +827,8 @@ def _can_reuse_ingress(relay, *, listen_url, audio_mode, rotation, fps_mode, ove
 
 def _start_proxy_ingress_unlocked(*, listen_url, stream_title, audio_mode=None, rotation=None, fps_mode=None, overlay=None):
     RELAY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RELAY_LISTENER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RELAY_LISTENER_LOG_PATH.write_text("", encoding="utf-8")
     log_handle = RELAY_LOG_PATH.open("ab")
     audio_mode = normalize_audio_mode(audio_mode)
     rotation = normalize_rotation_mode(rotation)
@@ -810,6 +881,17 @@ def _start_proxy_ingress_unlocked(*, listen_url, stream_title, audio_mode=None, 
         clear_relay_state()
         log_handle.close()
         raise
+    port = _listen_port_from_url(listen_url)
+    listener_monitor = None
+    if port:
+        try:
+            _append_listener_log_line(
+                RELAY_LISTENER_LOG_PATH,
+                f"listener ready port={port} listen_url={listen_url} ffmpeg_pid={proc.pid} loglevel={PROXY_INGRESS_LOGLEVEL}",
+            )
+            listener_monitor = _start_listener_monitor(port, proc.pid)
+        except Exception as exc:
+            LOGGER.warning("Failed to start RTMP listener monitor for port %s: %s", port, exc)
     ingress = decorate_stream_state(
         {
             "status": "running",
@@ -817,6 +899,8 @@ def _start_proxy_ingress_unlocked(*, listen_url, stream_title, audio_mode=None, 
             "pid": proc.pid,
             "listen_url": listen_url,
             "log_path": str(RELAY_LOG_PATH),
+            "listener_log_path": str(RELAY_LISTENER_LOG_PATH),
+            "listener_monitor_pid": listener_monitor.pid if listener_monitor else 0,
             "control_url": _proxy_control_url(),
             "stream_title": stream_title,
             "started_at": time.time(),
@@ -831,6 +915,9 @@ def _start_proxy_ingress_unlocked(*, listen_url, stream_title, audio_mode=None, 
             "overlay": overlay,
             "overlay_enabled": bool(overlay.get("enabled")),
             "overlay_feed_pid": overlay_feed.pid if overlay_feed else 0,
+            "listener_clients": [],
+            "listener_client_count": 0,
+            "listener_last_event_at": time.time(),
             "output_url": _proxy_internal_output_url(),
         },
         default_audio_mode=audio_mode,
@@ -1120,3 +1207,25 @@ def _run_overlay_feed(png_path, interval):
             except BrokenPipeError:
                 break
         time.sleep(interval)
+
+
+def _run_listener_monitor(port, ingress_pid, log_path):
+    port = int(port or 0)
+    ingress_pid = int(ingress_pid or 0)
+    previous = {}
+    _append_listener_log_line(log_path, f"listener monitor started port={port} ingress_pid={ingress_pid}")
+    while port and ingress_pid and _pid_alive(ingress_pid):
+        current = {(item["peer_addr"], item["state"]): item for item in _ss_connections(port)}
+        current_peers = {item["peer_addr"] for item in current.values()}
+        previous_peers = {item["peer_addr"] for item in previous.values()}
+        for key, item in current.items():
+            if key not in previous:
+                _append_listener_log_line(
+                    log_path,
+                    f"client state={item['state']} peer={item['peer_addr']} local={item['local_addr']}",
+                )
+        for peer_addr in sorted(previous_peers - current_peers):
+            _append_listener_log_line(log_path, f"client disconnected peer={peer_addr}")
+        previous = current
+        time.sleep(0.5)
+    _append_listener_log_line(log_path, f"listener monitor stopped port={port} ingress_pid={ingress_pid}")
