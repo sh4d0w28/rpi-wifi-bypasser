@@ -33,7 +33,11 @@ def chrome_screen_id(state):
         return "HOME"
     if state.get("ui_mode") == "menu":
         menu_id = (state.get("menu_id") or "root").lower()
+        if menu_id.startswith("expressvpn_region::"):
+            return "VPN"
         return {
+            "expressvpn": "VPN",
+            "expressvpn_country": "VPN",
             "youtube": "YT",
             "youtube_create": "YT",
             "youtube_create_audio": "YT",
@@ -47,6 +51,7 @@ def chrome_screen_id(state):
     return {
         "youtube": "YT",
         "youtube_qr": "QR",
+        "expressvpn": "VPN",
         "settings": "SET",
         "overview": "HOME",
         "probe": "SET",
@@ -340,6 +345,25 @@ def render_settings(draw, state):
         y += 15
 
 
+def render_expressvpn(draw, state):
+    vpn = state.get("vpn") or {}
+    rows = [
+        ("ST", fit_text(vpn.get("connection_state", "-"), 14), (240, 244, 255)),
+        ("CTY", fit_text(vpn.get("selected_country", "-"), 14), (255, 210, 90)),
+        ("REG", fit_text(vpn.get("region_label", "-"), 14), (120, 220, 255)),
+        ("PUB", fit_text(vpn.get("public_ip", "-"), 14), (120, 255, 160)),
+        ("VPN", fit_text(vpn.get("vpn_ip", "-"), 14), (120, 220, 255)),
+        ("NL", fit_text(vpn.get("network_lock_summary", "-"), 14), (255, 210, 90)),
+    ]
+    y = 22
+    for label, value, fill in rows:
+        draw.text((4, y), label, font=FONT, fill=(140, 170, 210))
+        draw.text((30, y), value, font=FONT, fill=fill)
+        y += 14
+    if vpn.get("last_error"):
+        draw.text((4, 106), fit_text(vpn.get("last_error", ""), 20), font=FONT, fill=(255, 96, 96))
+
+
 def render_portal_warning(draw, state):
     if not state["probe"].get("auth_required"):
         return
@@ -459,9 +483,11 @@ def render_screen(lcd, state):
         render_youtube(draw, image, state)
     elif state.get("ui_mode") == "screen" and state["screen_id"] == "youtube_qr":
         render_youtube_qr(draw, image, state)
+    elif state.get("ui_mode") == "screen" and state["screen_id"] == "expressvpn":
+        render_expressvpn(draw, state)
     elif state.get("ui_mode") == "screen" and state["screen_id"] == "settings":
         render_settings(draw, state)
-    if state.get("ui_mode") == "screen" and state["screen_id"] in ("overview", "probe", "youtube", "settings"):
+    if state.get("ui_mode") == "screen" and state["screen_id"] in ("overview", "probe", "youtube", "settings", "expressvpn"):
         render_portal_warning(draw, state)
     render_busy_overlay(draw, state)
     lcd.LCD_ShowImage(image.rotate(90), 0, 0)

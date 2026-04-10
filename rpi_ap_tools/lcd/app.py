@@ -34,6 +34,7 @@ from rpi_ap_tools.lcd.state import (
     start_watchers,
     tcp_latency_ms,
 )
+from rpi_ap_tools.system.expressvpn import connect_auto, connect_region, disconnect as expressvpn_disconnect, get_status_summary, list_country_groups
 from youtube_live import (
     DEFAULT_OVERLAY_HTML,
     YouTubeLiveError,
@@ -69,6 +70,7 @@ PROBE_INTERVAL_SEC = float(os.environ.get("PROBE_INTERVAL_SEC", "180.0"))
 NETWORK_FALLBACK_REFRESH_SEC = float(os.environ.get("NETWORK_FALLBACK_REFRESH_SEC", "60.0"))
 YOUTUBE_STATE_REFRESH_SEC = float(os.environ.get("YOUTUBE_STATE_REFRESH_SEC", "5.0"))
 STATUS_WRITE_SEC = float(os.environ.get("STATUS_WRITE_SEC", "5.0"))
+VPN_STATE_REFRESH_SEC = float(os.environ.get("VPN_STATE_REFRESH_SEC", "10.0"))
 STATUS_PATH = Path(os.environ.get("STATUS_PATH", "/run/rpi_ap_tools_status.json"))
 UPDATE_SCRIPT_PATH = Path(os.environ.get("UPDATE_SCRIPT_PATH", "/home/pi/update_ap.sh"))
 UPDATE_LOG_PATH = Path(os.environ.get("UPDATE_LOG_PATH", "/run/rpi_ap_tools_update.log"))
@@ -179,6 +181,8 @@ def main():
     last_status_signature = None
     live_input_res = "-"
     live_output_res = "-"
+    vpn_status = get_status_summary()
+    vpn_country_groups = (list_country_groups().get("countries") or [])
     state_lock = Lock()
     request_state_refresh()
 
@@ -188,6 +192,15 @@ def main():
 
     def selector_menu_ids():
         return {"youtube_create_audio", "youtube_create_privacy", "youtube_create_rotation", "youtube_create_fps"}
+
+    def vpn_region_menu_id(country_key):
+        return f"expressvpn_region::{country_key}"
+
+    def vpn_country_group(country_key):
+        for item in vpn_country_groups:
+            if item.get("key") == country_key:
+                return item
+        return None
 
     def menu_definition_for(menu_id, selected=0):
         title, items = get_menu_definition(menu_id)
@@ -281,6 +294,38 @@ def main():
             set_ui_message(f"Overlay {template_name} saved")
 
     def get_menu_definition(menu_id):
+        if menu_id == "expressvpn":
+            items = [
+                {"label": "Status", "kind": "screen", "target": "expressvpn"},
+                {"label": "Connect Auto", "kind": "action", "action": "expressvpn_connect_auto"},
+                {"label": "Select Country", "kind": "menu", "target": "expressvpn_country"},
+                {"label": "Disconnect", "kind": "action", "action": "expressvpn_disconnect"},
+            ]
+            return "ExpressVPN", items
+        if menu_id == "expressvpn_country":
+            items = []
+            if vpn_country_groups:
+                for country in vpn_country_groups:
+                    items.append({"label": country.get("label", "-"), "kind": "menu", "target": vpn_region_menu_id(country.get("key", ""))})
+            else:
+                items.append({"label": "No Countries", "kind": "noop", "disabled": True})
+            return "Country", items
+        if menu_id.startswith("expressvpn_region::"):
+            country_key = menu_id.split("::", 1)[1]
+            country = vpn_country_group(country_key)
+            if not country:
+                return "Region", [{"label": "No Regions", "kind": "noop", "disabled": True}]
+            items = [
+                {
+                    "label": region.get("label", region.get("id", "-")),
+                    "kind": "action",
+                    "action": "expressvpn_connect_region",
+                    "arg": region.get("id", ""),
+                    "checked": vpn_status.get("selected_region") == region.get("id", ""),
+                }
+                for region in country.get("regions") or []
+            ]
+            return country.get("label", "Region"), items
         if menu_id == "youtube":
             items = [{"label": "Dashboard", "kind": "screen", "target": "youtube"}]
             if youtube_auth.get("device_pending"):
@@ -343,7 +388,7 @@ def main():
             ]
         if menu_id == "update_confirm":
             return "Update", [{"label": "Yes", "kind": "action", "action": "update_run"}, {"label": "No", "kind": "action", "action": "update_cancel"}]
-        return "Main", [{"label": "YouTube", "kind": "menu", "target": "youtube"}, {"label": "Update", "kind": "menu", "target": "update_confirm"}, {"label": "Settings", "kind": "screen", "target": "settings"}]
+        return "Main", [{"label": "YouTube", "kind": "menu", "target": "youtube"}, {"label": "ExpressVPN", "kind": "menu", "target": "expressvpn"}, {"label": "Update", "kind": "menu", "target": "update_confirm"}, {"label": "Settings", "kind": "screen", "target": "settings"}]
 
     def current_menu_entry():
         return menu_stack[-1]
@@ -415,6 +460,7 @@ def main():
                 "settings_rotation": {"0": "OFF", "90": "+90", "-90": "-90"}.get(youtube_create_rotation, youtube_create_rotation),
                 "settings_fps": {"original": "ORIG", "30": "30FPS", "20": "20FPS"}.get(youtube_create_fps_mode, youtube_create_fps_mode.upper()),
                 "settings_audio": {"normal": "NORM", "voice": "VOICE", "mute": "MUTE"}.get(youtube_create_audio_mode, youtube_create_audio_mode.upper()),
+                "vpn": vpn_status,
                 "ap_password": ap_password,
                 "updated_at": now,
             }
@@ -460,6 +506,34 @@ def main():
             youtube_create_fps_mode = value
         set_ui_message(message)
         close_submenu()
+
+    def refresh_vpn_groups():
+        nonlocal vpn_country_groups
+        result = list_country_groups()
+        with state_lock:
+            vpn_country_groups = result.get("countries") or []
+        return result
+
+    def refresh_vpn_state():
+        nonlocal vpn_status
+        status = get_status_summary()
+        with state_lock:
+            vpn_status = status
+        return status
+
+    def trigger_expressvpn_action(action, region_id=""):
+        nonlocal current_screen, ui_mode
+        if action == "expressvpn_connect_auto":
+            result = connect_auto()
+        elif action == "expressvpn_connect_region":
+            result = connect_region(region_id)
+        else:
+            result = expressvpn_disconnect()
+        refresh_vpn_state()
+        refresh_vpn_groups()
+        set_ui_message(result.get("message", "VPN action finished"))
+        current_screen = "expressvpn"
+        ui_mode = "screen"
 
     def trigger_youtube_action(action):
         nonlocal youtube_auth, youtube_creation, youtube_status_message, current_screen, ui_mode, youtube_create_privacy_status, youtube_create_rotation, youtube_create_fps_mode
@@ -536,6 +610,12 @@ def main():
         action = item.get("action")
         if action in {"youtube_auth_start", "youtube_auth_poll", "youtube_auth_restart", "youtube_create", "youtube_create_defaults"}:
             trigger_youtube_action(action)
+        elif action == "expressvpn_connect_auto":
+            trigger_expressvpn_action(action)
+        elif action == "expressvpn_connect_region":
+            trigger_expressvpn_action(action, item.get("arg", ""))
+        elif action == "expressvpn_disconnect":
+            trigger_expressvpn_action(action)
         elif action == "youtube_create_audio":
             trigger_simple_setting("audio", item.get("arg", "normal"), f"Sound {item.get('arg', 'normal').upper()}")
         elif action == "youtube_create_privacy":
@@ -632,6 +712,7 @@ def main():
         nonlocal prev, prev_t, cpu_temp, cpu_pct, mem_pct, rx1ps, tx1ps
         nonlocal ap_name, ap_password, w0, w1, active_wifi, ap_ok, cl_ok, signal, last_network_refresh_at
         last_youtube_refresh_at = 0.0
+        last_vpn_refresh_at = 0.0
         while True:
             now = time.time()
             did_work = False
@@ -663,6 +744,12 @@ def main():
             if now - last_youtube_refresh_at >= YOUTUBE_STATE_REFRESH_SEC:
                 refresh_youtube_state()
                 last_youtube_refresh_at = now
+                did_work = True
+            if now - last_vpn_refresh_at >= VPN_STATE_REFRESH_SEC:
+                refresh_vpn_state()
+                if not vpn_country_groups or current_menu_entry()["id"].startswith("expressvpn"):
+                    refresh_vpn_groups()
+                last_vpn_refresh_at = now
                 did_work = True
             if did_work:
                 request_state_refresh()
