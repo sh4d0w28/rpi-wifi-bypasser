@@ -299,13 +299,13 @@ def render_youtube(draw, image, state):
         return
     rows = [
         ("Name", fit_text(youtube.get("title", "No stream"), 16), (240, 244, 255)),
-        ("RTMP", fit_text(youtube.get("rtmp_summary", "-"), 14), (120, 220, 255)),
-        ("Priv", fit_text((youtube.get("privacy_status") or "public").upper(), 14), (255, 210, 90)),
-        ("Rot", youtube.get("rotation_short", "OFF"), (255, 210, 90)),
-        ("FPS", youtube.get("fps_mode_short", "ORIG"), (120, 255, 160)),
+        ("YT", youtube.get("youtube_stream_status") or "-", (120, 255, 160) if "ACTIVE" in (youtube.get("youtube_stream_status") or "") else (255, 210, 90)),
+        ("Send", youtube.get("transfer_status") or "WAIT", (120, 255, 160) if youtube.get("transfer_status") == "SEND" else (255, 210, 90)),
+        ("Rate", youtube.get("transfer_rate") or "-", (120, 220, 255)),
+        ("Relay", youtube.get("relay_status") or "-", (120, 255, 160) if youtube.get("relay_status") == "running" else (255, 210, 90)),
+        ("Cl", str(youtube.get("relay_client_count") or 0), (240, 244, 255)),
         ("In", youtube.get("incoming_res") or "-", (240, 244, 255)),
         ("Out", youtube.get("outgoing_res") or "-", (120, 220, 255)),
-        ("Ovl", "Active" if youtube.get("overlay_enabled") else "Off", (255, 210, 90) if youtube.get("overlay_enabled") else (180, 180, 180)),
     ]
     y = 22
     for label, value, fill in rows:

@@ -52,6 +52,18 @@ def _swap_resolution_if_rotated(width, height, rotation):
     return f"{width}x{height}"
 
 
+def _age_text(seconds):
+    if seconds is None:
+        return "-"
+    try:
+        value = max(0, int(round(float(seconds))))
+    except (TypeError, ValueError):
+        return "-"
+    if value < 60:
+        return f"{value}s ago"
+    return f"{value // 60}m {value % 60}s ago"
+
+
 def _stream_dashboard(ap_name, stream_state, monitor):
     relay = (stream_state or {}).get("relay") or {}
     privacy = ((stream_state or {}).get("privacy_status") or "public").upper()
@@ -76,6 +88,17 @@ def _stream_dashboard(ap_name, stream_state, monitor):
         problems.append("Local relay is stopped.")
     elif relay.get("status") == "standby" and (stream_state or {}).get("target_url"):
         problems.append("Local relay is accepting RTMP but not forwarding to YouTube.")
+    if relay.get("status") == "running" and not relay.get("youtube_transfer_active"):
+        problems.append("Relay egress is running, but fresh YouTube transfer metrics are not available.")
+    transfer_bits = []
+    if relay.get("youtube_bitrate_text"):
+        transfer_bits.append(relay.get("youtube_bitrate_text"))
+    if relay.get("youtube_speed_text"):
+        transfer_bits.append(relay.get("youtube_speed_text"))
+    transfer_age = _age_text(relay.get("youtube_metrics_age_sec"))
+    if transfer_age != "-":
+        transfer_bits.append(transfer_age)
+    transfer_status = "sending" if relay.get("youtube_transfer_active") else "waiting"
     return {
         "wifi_name": ap_name or "-",
         "rtmp_endpoint": _strip_rtmp_scheme((stream_state or {}).get("proxy_publish_url") or (stream_state or {}).get("target_url")),
@@ -85,6 +108,10 @@ def _stream_dashboard(ap_name, stream_state, monitor):
         "youtube_status": monitor.get("summary") or "UNKNOWN",
         "youtube_message": monitor.get("message") or "",
         "relay_status": relay.get("status") or "-",
+        "transfer_status": transfer_status,
+        "transfer_metrics": " / ".join(transfer_bits) if transfer_bits else "-",
+        "stream_status": ((monitor.get("stream") or {}).get("stream_status") or "-").upper(),
+        "health_status": ((monitor.get("stream") or {}).get("health_status") or "-").upper(),
         "problems": problems,
     }
 

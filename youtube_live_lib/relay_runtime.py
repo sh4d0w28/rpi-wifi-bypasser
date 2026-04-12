@@ -40,6 +40,7 @@ from .config import (
     RELAY_STATE_PATH,
     RELAY_START_TIMEOUT_SEC,
     RELAY_STOP_TIMEOUT_SEC,
+    RELAY_TRANSFER_STALE_SEC,
     ZMQ_LINGER,
     ZMQ_RCVTIMEO,
     ZMQ_REQ,
@@ -277,8 +278,11 @@ def _extract_video_dimensions_from_log(log_path):
 def _extract_relay_runtime_metrics_from_log(log_path):
     if not log_path:
         return {}
+    log_mtime = 0.0
     try:
-        raw = Path(log_path).read_text(encoding="utf-8", errors="ignore")
+        path = Path(log_path)
+        log_mtime = path.stat().st_mtime
+        raw = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return {}
     metrics = {}
@@ -299,7 +303,8 @@ def _extract_relay_runtime_metrics_from_log(log_path):
         except ValueError:
             pass
     if metrics:
-        metrics["metrics_detected_at"] = time.time()
+        metrics["metrics_detected_at"] = log_mtime or time.time()
+        metrics["metrics_age_sec"] = max(0.0, time.time() - metrics["metrics_detected_at"])
     return metrics
 
 
@@ -343,16 +348,29 @@ def _resolve_proxy_video_encoder():
 def _populate_relay_video_fields(state):
     if not isinstance(state, dict) or not state:
         return state
+    payload = dict(state)
     width = state.get("video_width")
     height = state.get("video_height")
     if width and height:
-        payload = dict(state)
         payload["video_orientation"] = _relay_orientation(width, height)
-        return payload
-    payload = dict(state)
-    payload.update(_extract_video_dimensions_from_log(state.get("log_path", "")))
+    else:
+        payload.update(_extract_video_dimensions_from_log(state.get("log_path", "")))
     payload.update(_extract_relay_runtime_metrics_from_log(state.get("log_path", "")))
     return payload
+
+
+def _transfer_active(state):
+    if not isinstance(state, dict) or not state.get("running"):
+        return False
+    try:
+        bitrate_ok = float(state.get("video_bitrate_kbps") or 0) > 0
+    except (TypeError, ValueError):
+        bitrate_ok = False
+    try:
+        fresh = state.get("metrics_age_sec") is not None and float(state.get("metrics_age_sec")) <= RELAY_TRANSFER_STALE_SEC
+    except (TypeError, ValueError):
+        fresh = False
+    return bitrate_ok and fresh
 
 
 def _normalize_process_state(payload, *, check_fn):
@@ -381,6 +399,8 @@ def _egress_running(pid, state):
 def _compose_relay_state(*, ingress, egress, stream_title="", audio_mode=None, rotation=None, fps_mode=None, overlay=None):
     ingress = decorate_stream_state(ingress or {}, default_audio_mode=audio_mode, default_rotation=rotation, default_fps_mode=fps_mode)
     egress = decorate_stream_state(egress or {}, default_audio_mode=audio_mode, default_rotation=rotation, default_fps_mode=fps_mode)
+    ingress = _populate_relay_video_fields(ingress)
+    egress = _populate_relay_video_fields(egress)
     relay = decorate_stream_state(
         {
             "pid": ingress.get("pid", 0),
@@ -409,6 +429,17 @@ def _compose_relay_state(*, ingress, egress, stream_title="", audio_mode=None, r
             "listener_last_event_at": ingress.get("listener_last_event_at", 0),
             "internal_output_url": ingress.get("output_url", ""),
             "internal_input_url": egress.get("input_url", _proxy_internal_input_url()),
+            "input_bitrate_kbps": ingress.get("video_bitrate_kbps"),
+            "input_bitrate_text": ingress.get("video_bitrate_text", ""),
+            "input_speed": ingress.get("encoder_speed"),
+            "input_speed_text": ingress.get("encoder_speed_text", ""),
+            "input_metrics_age_sec": ingress.get("metrics_age_sec"),
+            "youtube_bitrate_kbps": egress.get("video_bitrate_kbps"),
+            "youtube_bitrate_text": egress.get("video_bitrate_text", ""),
+            "youtube_speed": egress.get("encoder_speed"),
+            "youtube_speed_text": egress.get("encoder_speed_text", ""),
+            "youtube_metrics_age_sec": egress.get("metrics_age_sec"),
+            "youtube_transfer_active": _transfer_active(egress),
             "warning": ingress.get("warning") or egress.get("warning") or "",
             "ingress": ingress,
             "egress": egress,

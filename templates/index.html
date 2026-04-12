@@ -752,7 +752,9 @@
           <p><strong>IN:</strong> <span class="mono">{{ youtube_dashboard.input_resolution }}</span></p>
           <p><strong>OUT:</strong> <span class="mono">{{ youtube_dashboard.output_resolution }}</span></p>
           <p><strong>YouTube:</strong> <span class="mono">{{ youtube_dashboard.youtube_status }}</span>{% if youtube_dashboard.youtube_message %} <span class="help-text">{{ youtube_dashboard.youtube_message }}</span>{% endif %}</p>
+          <p><strong>YouTube input:</strong> <span class="mono">{{ youtube_dashboard.stream_status }}</span> <span class="help-text">health {{ youtube_dashboard.health_status }}</span></p>
           <p><strong>Relay:</strong> <span class="mono">{{ youtube_dashboard.relay_status }}</span></p>
+          <p><strong>Transfer:</strong> <span class="mono">{{ youtube_dashboard.transfer_status }}</span> <span class="help-text">{{ youtube_dashboard.transfer_metrics }}</span></p>
           {% if youtube_dashboard.problems %}
           <p><strong>Problems:</strong></p>
           {% for item in youtube_dashboard.problems %}
@@ -770,7 +772,10 @@
           <p><strong>Video encoder:</strong> <span class="mono">{{ youtube_stream.relay.video_encoder_label or youtube_stream.relay.video_encoder or 'copy' }}</span></p>
           <p><strong>Overlay:</strong> <span class="mono">{{ 'visible' if youtube_stream.relay.overlay_enabled else 'hidden' }}</span></p>
           <p><strong>Listener clients:</strong> <span class="mono">{{ youtube_stream.relay.listener_client_count or 0 }}</span></p>
+          <p><strong>Input rate:</strong> <span class="mono">{{ youtube_stream.relay.input_bitrate_text or '-' }}</span>{% if youtube_stream.relay.input_speed_text %} <span class="help-text">{{ youtube_stream.relay.input_speed_text }}</span>{% endif %}</p>
+          <p><strong>YouTube rate:</strong> <span class="mono">{{ youtube_stream.relay.youtube_bitrate_text or '-' }}</span>{% if youtube_stream.relay.youtube_speed_text %} <span class="help-text">{{ youtube_stream.relay.youtube_speed_text }}</span>{% endif %}</p>
           <p><strong>Relay log:</strong> <span class="mono">{{ youtube_stream.relay.log_path }}</span></p>
+          <p><strong>Egress log:</strong> <span class="mono">{{ youtube_stream.relay.egress_log_path }}</span></p>
           <p><strong>Listener log:</strong> <span class="mono">{{ youtube_stream.relay.listener_log_path }}</span></p>
           {% endif %}
           <form method="post" action="/youtube/audio-mode">

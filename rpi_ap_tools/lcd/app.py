@@ -40,6 +40,7 @@ from youtube_live import (
     YouTubeLiveError,
     ensure_overlay_html_exists,
     get_auth_status,
+    get_stream_monitor_status,
     load_creation_state,
     load_overlay_state,
     load_stream_state,
@@ -164,6 +165,7 @@ def main():
     youtube_auth = get_auth_status()
     youtube_creation = load_creation_state()
     youtube_stream = load_stream_state()
+    youtube_monitor = {}
     youtube_status_message = "Use YT menu"
     youtube_create_audio_mode = youtube_creation.get("audio_mode") or youtube_stream.get("audio_mode", "normal")
     youtube_create_privacy_status = youtube_creation.get("privacy_status") or youtube_stream.get("privacy_status", "public")
@@ -247,6 +249,21 @@ def main():
             return live_output_res
         return rotate_resolution_text(incoming, youtube_stream.get("rotation", "0"))
 
+    def youtube_transfer_status_text():
+        relay = youtube_stream.get("relay") or {}
+        return "SEND" if relay.get("youtube_transfer_active") else "WAIT"
+
+    def youtube_transfer_rate_text():
+        relay = youtube_stream.get("relay") or {}
+        return relay.get("youtube_bitrate_text") or "-"
+
+    def youtube_stream_status_text():
+        stream_status = ((youtube_monitor.get("stream") or {}).get("stream_status") or "").upper()
+        health_status = ((youtube_monitor.get("stream") or {}).get("health_status") or "").upper()
+        if stream_status and health_status:
+            return f"{stream_status}/{health_status}"
+        return youtube_monitor.get("summary") or "-"
+
     def default_create_settings():
         return (
             youtube_creation.get("audio_mode") or youtube_stream.get("audio_mode", "normal"),
@@ -261,6 +278,11 @@ def main():
         if youtube_auth.get("authorized") and not probe_cache.get("auth_required"):
             return False
         return bool(youtube_status_message and youtube_status_message not in ("Use YT menu", "AUTH FIRST"))
+
+    def youtube_ui_active():
+        if current_screen in ("youtube", "youtube_qr"):
+            return True
+        return current_menu_entry().get("id", "").startswith("youtube")
 
     def apply_overlay_demo(template_name):
         overlay = load_overlay_state()
@@ -450,6 +472,11 @@ def main():
                     "incoming_res": stream_input_resolution_text(),
                     "outgoing_res": stream_output_resolution_text(),
                     "overlay_enabled": bool((youtube_stream.get("relay") or {}).get("overlay_enabled")),
+                    "relay_status": (youtube_stream.get("relay") or {}).get("status") or "-",
+                    "relay_client_count": (youtube_stream.get("relay") or {}).get("listener_client_count") or 0,
+                    "transfer_status": youtube_transfer_status_text(),
+                    "transfer_rate": youtube_transfer_rate_text(),
+                    "youtube_stream_status": youtube_stream_status_text(),
                     "rtmp_summary": rtmp_summary_text(),
                     "creation": youtube_creation,
                     "status_message": youtube_status_message if youtube_auth.get("device_pending") else "AUTH FIRST" if (probe_cache.get("auth_required") or not youtube_auth.get("authorized")) and (youtube_creation or {}).get("status") != "creating" else youtube_status_message,
@@ -678,10 +705,16 @@ def main():
             go_back()
 
     def refresh_youtube_state():
-        nonlocal youtube_auth, youtube_creation, youtube_stream, live_input_res, live_output_res
+        nonlocal youtube_auth, youtube_creation, youtube_stream, youtube_monitor, live_input_res, live_output_res
         auth = get_auth_status()
         creation = load_creation_state()
         stream = load_stream_state()
+        monitor = youtube_monitor
+        if youtube_ui_active():
+            try:
+                monitor = get_stream_monitor_status()
+            except YouTubeLiveError as exc:
+                monitor = {"ok": False, "summary": "YT ERR", "message": str(exc), "stream": {}, "issues": []}
         detected_in = "-"
         relay = stream.get("relay") or {}
         width = relay.get("video_width")
@@ -705,6 +738,7 @@ def main():
             youtube_auth = auth
             youtube_creation = creation
             youtube_stream = stream
+            youtube_monitor = monitor
             live_input_res = detected_in
             live_output_res = output_res
 
